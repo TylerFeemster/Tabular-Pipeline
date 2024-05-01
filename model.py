@@ -3,10 +3,10 @@ from typing import Union
 import sklearn
 import xgboost as xgb
 import numpy as np
-from prep import Preparation
+from preprocessing import Preprocessing
 
 class Model:
-    def __init__(self, data : Preparation):
+    def __init__(self, data : Preprocessing):
         pass
 
     def fit(self):
