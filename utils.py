@@ -10,6 +10,11 @@ def title(message : str):
     separator(symbol='-')
 
 @staticmethod
+def subtitle(message: str):
+    print(message)
+    separator(symbol='-')
+
+@staticmethod
 def align_integer(i : int, total : int):
     length = len(str(total))
     s = str(i)

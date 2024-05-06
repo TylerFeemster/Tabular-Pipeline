@@ -2,7 +2,7 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
-from utils import separator, title, align_integer
+from utils import separator, title, subtitle, align_integer
 
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
@@ -11,7 +11,7 @@ from typing import Union
 
 class Explorer:
     def __init__(self, data: pd.DataFrame,
-                 target: Union[str, list, None] = None,
+                 targets: Union[str, list, None] = None,
                  primary_column: Union[str, None] = None) -> None:
         '''
 
@@ -19,30 +19,32 @@ class Explorer:
             train: dataframe for exploration
             targets: prediction columns
         '''
-        # verify target(s) are in dataframe columns
-        if target is not None:
-            assert set(target) <= set(data.columns)
-            
-            if type(target) is str:
-                target = [target]
-        
-        if primary_column is not None:
+
+        if primary_column:
             # verify primary key is a dataframe column
             assert primary_column in data.columns
             self.data = data.set_index(primary_column)
         else:
             self.data = data.copy()
-
-        self.targets = target
-        self.cols = self.data.columns
-
+        
         drop_cols = []
-        if self.targets is not None:
+        self.targets = []
+        self.y = None
+        if targets:
+            if type(targets) is str:
+                targets = [targets]
+
+            # verify target(s) are in dataframe columns
+            assert set(targets) <= set(data.columns)
+            self.targets = targets.copy()
+
             drop_cols = self.targets
             self.y = self.data[self.targets]
-        
+
         self.X = self.data.drop(columns=drop_cols)
         self.X_cols = self.X.columns
+
+        self.cols = self.data.columns
 
         self.categ_cols = self.X.select_dtypes(include=['object']).columns
         self.numer_cols = self.X.select_dtypes(include=['number']).columns
@@ -80,15 +82,15 @@ class Explorer:
             display: whether or not to print to terminal
         '''
         if display:
-            title('Checking Missing Values...')
+            title('Checking missing values...')
 
-        dct = {}
+        problem_cols = {}
         no_missing_values = True
         for col in self.cols:
             na_count = self.data[col].isna().sum()
             if na_count != 0:
                 no_missing_values = False
-                dct[col] = na_count
+                problem_cols[col] = na_count
 
         if no_missing_values:
             if display: 
@@ -99,10 +101,10 @@ class Explorer:
 
         if display:
             print('Missing values in dataset by feature: ')
-            for key in dct.keys():
-                print(f'{key} : {dct[key]}')
+            for key, val in problem_cols.items():
+                print(f'{key} : {val}')
 
-        return dct        
+        return problem_cols
 
 ### Column Exploration
 
@@ -122,28 +124,23 @@ class Explorer:
 
         return unique_vals
     
-    def histogram(self, column : str):
-        title(f'Histogram for {column}')
-        sns.displot(self.data, x=column, kind='hist')
-        plt.show()
-        return
-    
-    def ecdf(self, column: str):
-        title(f'ECDF-Box Visual for {column}')
-        _, (ax1, ax2) = plt.subplots(nrows=2, ncols=1, figsize=(6, 8),
-                                     gridspec_kw={'height_ratios': [2, 1]})
+    def distribution(self, column : str):
+        title(f'Distribution Visual for {column}')
+        _, (ax1, ax2, ax3) = plt.subplots(nrows=3, ncols=1, figsize=(6, 6),
+                                          gridspec_kw={'height_ratios': [2, 2, 1]})
+        
+        # Histogram (top)
+        sns.histplot(self.data, x=column, stat='proportion', ax=ax1)
+        ax1.set_title(f"Distribution of {column}")
 
-        sns.ecdfplot(self.data, x=column, stat='proportion', ax=ax1)
-        ax1.set_title("ECDF Plot")
-        ax1.set_xlabel("")
+        # Empirical CDF (middle)
+        sns.ecdfplot(self.data, x=column, stat='proportion', ax=ax2)
+        ax2.set_yticks(np.arange(0, 1, 0.25))
 
-        sns.boxplot(self.data, x=column, ax=ax2)
-        ax2.set_title("Box Plot")
+        # Box Plot (bottom)
+        sns.boxplot(self.data, x=column, ax=ax3)
 
-        plt.subplots_adjust(hspace=0.3)
-
-        ax1.set_yticks(np.linspace(0, 1, 11))
-
+        plt.subplots_adjust(hspace=0) # no spacing
         plt.show()
         return
 
@@ -152,22 +149,22 @@ class Explorer:
     def pca_analysis(self, n_components : Union[int, None] = None, 
                      display : bool = True) -> PCA:
         
-        if n_components is not None and n_components >= len(self.X_norm.columns):
+        if n_components and n_components >= len(self.X_norm.columns):
             n_components = None
         
         if display:
-            if n_components is None:
-                title('Performing pca analysis with all components...')
-            else:
+            if n_components:
                 title('Performing pca analysis for top {n_components} components...')
+            else:
+                title('Performing pca analysis with all components...')
+                
 
         params = {'n_components' : n_components,
                   'random_state' : 0}
         pca = PCA(**params).fit(self.X_norm)
 
         if display:
-            print('Ratio of explained variance:')
-            separator(symbol='-')
+            subtitle('Fraction of explained variance:')
             total = pca.n_components_
             for i, ratio in enumerate(pca.explained_variance_ratio_):
                 n = align_integer(i, total)
@@ -194,47 +191,39 @@ class Explorer:
 
         return kmeans
 
-
-    def distribution(self, col, discrete=False):
-        assert col in self.cols
-        sns.displot(self.data, x=col, discrete=discrete)
-        plt.title(f'Distribution of {col}')
-        plt.show()
-
     # TODO: Fix this; maybe add choices manually
     def compare(self, col1, col2) -> None:
         assert col1 in self.cols and col2 in self.cols
 
         # storing boolean values for compact code
-        numeric = (col1 in self.cont_cols, 
-                   col2 in self.cont_cols)
+        bool1 = col1 in self.cont_cols 
+        bool2 = col2 in self.cont_cols
 
-        if numeric[0] and numeric[1]: # both continuous
+        if bool1 and bool2: # both continuous
             sns.displot(self.data, x=col1, y=col2)
-        elif numeric[0]: # col1 continuous, col2 not
+        elif bool1: # col1 continuous, col2 not
             sns.displot(self.data, x=col2, y=col1, kind="kde")
-        elif numeric[1]: # col1 not, col2 continuous
+        elif bool2: # col1 not, col2 continuous
             sns.displot(self.data, x=col1, y=col2, kind="kde")
         else: # fully categorical or integral
             sns.displot(self.data, x=col1, y=col2, kind="hist")
 
-        plt.title(f'Comparing {col2} with {col1}')    
+        plt.title(f'Comparing {col2} with {col1}')
         plt.show()
 
 if __name__ == "__main__":
-    df = pd.read_csv('./data/s4e5/train.csv')
+    df = pd.read_csv('./data/s4e4/train.csv')
 
     prep = Explorer(df, primary_column='id')
-    #prep.describe()
-    #prep.datatypes()
-    #prep.missing_values()
+    prep.describe()
+    prep.datatypes()
+    prep.missing_values()
     
-    #prep.get_columns()
-    #prep.histogram('FloodProbability')
-    #prep.unique_values('InadequatePlanning')
+    prep.get_columns()
+    prep.unique_values('Sex')
     
-    #prep.compare('InadequatePlanning', 'FloodProbability')
-    #prep.cluster_analysis(n_clusters=10)
-    #prep.pca_analysis()
+    prep.compare('Whole weight.1', 'Whole weight.2')
+    prep.cluster_analysis(n_clusters=2)
+    prep.pca_analysis()
 
-    prep.ecdf('InadequatePlanning')
+    prep.distribution('Whole weight.2')
