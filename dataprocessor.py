@@ -60,7 +60,7 @@ class DataProcessor:
         self.num_cols = self.X.select_dtypes(include=['number']).columns
 
         self.int_cols = self.X.select_dtypes(include=['int']).columns
-        self.flo_cols = self.X.select_dtypes(include=['float']).columns
+        self.flt_cols = self.X.select_dtypes(include=['float']).columns
 
         stats = self.X[self.num_cols].describe().T[['mean', 'std']]
         self.X_norm = (self.X[self.num_cols] - stats['mean']) / stats['std']
@@ -91,7 +91,7 @@ class DataProcessor:
         problem_cols = {}
         no_missing_values = True
         for col in self.cols:
-            na_count = self.data[col].isna().sum()
+            na_count = self.train[col].isna().sum()
             if na_count != 0:
                 no_missing_values = False
                 problem_cols[col] = na_count
@@ -115,12 +115,12 @@ class DataProcessor:
     def get_columns(self, display : bool = True):
         if display:
             title('Columns')
-            for col in self.data.columns:
+            for col in self.train.columns:
                 print(col)
-        return self.data.columns
+        return self.train.columns
     
     def unique_values(self, column : str, display : bool = True):
-        unique_vals = np.sort(self.data[column].unique())
+        unique_vals = np.sort(self.train[column].unique())
 
         if display:
             title(f'Unique values of {column}')
@@ -134,15 +134,15 @@ class DataProcessor:
                                           gridspec_kw={'height_ratios': [2, 2, 1]})
         
         # Histogram (top)
-        sns.histplot(self.data, x=column, stat='proportion', ax=ax1)
+        sns.histplot(self.train, x=column, stat='proportion', ax=ax1)
         ax1.set_title(f"Distribution of {column}")
 
         # Empirical CDF (middle)
-        sns.ecdfplot(self.data, x=column, stat='proportion', ax=ax2)
+        sns.ecdfplot(self.train, x=column, stat='proportion', ax=ax2)
         ax2.set_yticks(np.arange(0, 1, 0.25))
 
         # Box Plot (bottom)
-        sns.boxplot(self.data, x=column, ax=ax3)
+        sns.boxplot(self.train, x=column, ax=ax3)
 
         plt.subplots_adjust(hspace=0) # no spacing
         plt.show()
@@ -152,7 +152,7 @@ class DataProcessor:
 
     def correlation(self):
         title('Correlation Heat Map')
-        sns.heatmap(self.train.corr())
+        sns.heatmap(self.train[self.num_cols].corr())
         return
 
 ### Unsupervised Learning
@@ -168,7 +168,6 @@ class DataProcessor:
                 title('Performing pca analysis for top {n_components} components...')
             else:
                 title('Performing pca analysis with all components...')
-                
 
         params = {'n_components' : n_components,
                   'random_state' : 0}
@@ -207,17 +206,17 @@ class DataProcessor:
         assert col1 in self.cols and col2 in self.cols
 
         # storing boolean values for compact code
-        bool1 = col1 in self.cont_cols 
-        bool2 = col2 in self.cont_cols
+        bool1 = col1 in self.flt_cols 
+        bool2 = col2 in self.flt_cols
 
         if bool1 and bool2: # both continuous
-            sns.displot(self.data, x=col1, y=col2)
+            sns.displot(self.train, x=col1, y=col2)
         elif bool1: # col1 continuous, col2 not
-            sns.displot(self.data, x=col2, y=col1, kind="kde")
+            sns.displot(self.train, x=col2, y=col1, kind="kde")
         elif bool2: # col1 not, col2 continuous
-            sns.displot(self.data, x=col1, y=col2, kind="kde")
+            sns.displot(self.train, x=col1, y=col2, kind="kde")
         else: # fully categorical or integral
-            sns.displot(self.data, x=col1, y=col2, kind="hist")
+            sns.displot(self.train, x=col1, y=col2, kind="hist")
 
         plt.title(f'Comparing {col2} with {col1}')
         plt.show()
@@ -226,9 +225,9 @@ if __name__ == "__main__":
     df = pd.read_csv('./data/s4e4/train.csv')
 
     prep = DataProcessor(df, primary_column='id')
-    prep.describe()
     prep.datatypes()
     prep.missing_values()
+    prep.correlation()
     
     prep.get_columns()
     prep.unique_values('Sex')
