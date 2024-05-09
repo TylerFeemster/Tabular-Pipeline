@@ -252,11 +252,15 @@ class Explorer:
 
         return kmeans
     
-    # TODO: make plots more friendly for different data.
     def compare(self, col1 : str, col2 : str) -> None:
         '''
-        Provides visualization showing the relationship between column \'col1\'
-        and column \'col2\'.
+        Provides a visualization showing the relationship between column \'col1\'
+        and column \'col2\'. The function is aware of the nature of the columns:
+        categorical, integral, or float. If both are categorical, it provides a 
+        countplot; if only one is categorical, separate histograms are overlaid 
+        across the category showing the distribution of the other column. If both
+        are numerical, a 2D histplot is given; for integral data, the function
+        sets the binwidth to 1 for naturalness.
 
         Arguments:
             col1: first column
@@ -265,19 +269,42 @@ class Explorer:
         assert col1 in self.cols and col2 in self.cols
 
         # storing boolean values for compact code
-        bool1 = col1 in self.flt_cols
-        bool2 = col2 in self.flt_cols
+        cat1 = col1 in self.cat_cols
+        cat2 = col2 in self.cat_cols
 
-        if bool1 and bool2:  # both continuous
-            sns.displot(self.data, x=col1, y=col2)
-        elif bool1:  # col1 continuous, col2 not
-            sns.displot(self.data, x=col2, y=col1, kind="kde")
-        elif bool2:  # col1 not, col2 continuous
-            sns.displot(self.data, x=col1, y=col2, kind="kde")
-        else:  # fully categorical or integral
-            sns.displot(self.data, x=col1, y=col2, kind="hist")
+        flt1 = col1 in self.flt_cols
+        flt2 = col2 in self.flt_cols
 
-        plt.title(f'{col2}-{col1} Relationship')
+        if cat1 or cat2:
+            if cat1 and cat2:
+                sns.countplot(self.data, x=col1, y=col2)
+            elif cat1:
+                if flt2:
+                    sns.histplot(self.data, x=col2, hue=col1)
+                else: # integral data
+                    sns.histplot(self.data, x=col2, hue=col1, binwidth=1)
+            else: # cat2
+                if flt1:
+                    sns.histplot(self.data, x=col1, hue=col2)
+                else: # integral data
+                    sns.histplot(self.data, x=col1, hue=col2, binwidth=1)
+
+        else: # here, there's only numerical variables
+            if flt1 or flt2:
+                if flt1 and flt2:
+                    sns.histplot(self.data, x=col1, y=col2)
+                elif flt1:
+                    width = max(self.data[col1]) - min(self.data[col1])
+                    sns.histplot(self.data, x=col1, y=col2, binwidth=(width/100, 1))
+                else: # flt2
+                    width = max(self.data[col2]) - min(self.data[col2])
+                    sns.histplot(self.data, x=col1, y=col2, binwidth=(1, width/100))
+
+            else:
+                sns.histplot(self.data, x=col1, y=col2, binwidth=(1, 1))
+
+
+        plt.title(f'{col2} - {col1} Relationship')
         plt.show()
         return
 
@@ -292,7 +319,8 @@ if __name__ == "__main__":
     prep.unique_values('Sex')
     prep.unique_values()
     
-    #prep.compare('Whole weight.1', 'Whole weight.2')
+    prep.compare('Whole weight.1', 'Whole weight.2')
+    Explorer(pd.read_csv('./data/s4e5/train.csv')).compare('FloodProbability', 'PoliticalFactors')
     prep.cluster_analysis(n_clusters=2)
     prep.pca_analysis()
 
