@@ -7,6 +7,7 @@ from utils import separator, title, subtitle, align_integer
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.model_selection import GroupKFold
+from sklearn.preprocessing import RobustScaler
 
 from explorer import Explorer
 
@@ -45,6 +46,7 @@ class DataProcessor(Explorer):
             else:
                 self.targets = [target]
         
+        self.test = None
         if test_data is not None:
             if primary_column:
                 assert primary_column in test_data.columns
@@ -68,13 +70,21 @@ class DataProcessor(Explorer):
         self.X = self.train.drop(columns=self.targets)
         self.X_cols = self.X.columns
 
+        self.X_new = self.X.copy()
+
         self.cols = self.train.columns
 
         self.cat_cols = self.X.select_dtypes(include=['object']).columns
         self.num_cols = self.X.select_dtypes(include=['number']).columns
 
-        stats = self.X[self.num_cols].describe().T[['mean', 'std']]
-        self.X_norm = (self.X[self.num_cols] - stats['mean']) / stats['std']
+        # Unsupervised: use all X available, train and test
+        self.X_unsupervised = self.X[self.num_cols].copy()
+        if self.test is not None:
+            self.X_unsupervised = pd.concat([self.X_unsupervised, 
+                                             self.test[self.num_cols]], 
+                                             axis=0)
+        stats = self.X_unsupervised.describe().T
+        self.X_unsupervised = (self.X_unsupervised - stats['mean']) / stats['std']
 
         # Explorer
         super().__init__(train_data, targets=self.targets)
@@ -83,7 +93,46 @@ class DataProcessor(Explorer):
         self.cv = None
         self.n_folds = None
 
+### Adding Features
+
+    def add_logs(self, force : bool = False) -> None:
+
+        for col in self.num_cols:
+            if min(self.X[col]) > 0:
+                self.X_new[f'log {col}'] = np.log(self.X[col])
+            
+            elif force:
+                minimum = min(self.X[col])
+                self.X_new[f'log {col}'] = np.log(self.X[col] - minimum + 1)
+
+    def add_pca_components(self, n_components : Union[int, None] = None) -> None:
+        
+        if n_components is None or n_components > len(self.X_unsupervised.columns):
+            n_components = len(self.X_unsupervised.columns)
+
+        pca = PCA(n_components=n_components).fit(self.X_unsupervised)
+        self.X_new[[f'pca {i+1}' for i in range(n_components)]] = pca.transform(
+            self.X_unsupervised.loc[self.X.index])
+
+        return
+    
+    def add_clusters(self, n_clusters : int = 8) -> None:
+        
+        kmeans = KMeans(n_clusters=n_clusters).fit(self.X_unsupervised)
+        self.X_new['Cluster'] = kmeans.predict(
+            self.X_unsupervised.loc[self.X.index]).astype(str) # avoid meaningless numeric
+        
+        return
+
 ### Preprocessing
+
+    def scale(self):
+
+        scaler = RobustScaler(unit_variance=True)
+        self.X_scaled = scaler.fit_transform(self.X_new)
+
+        return
+
 
     def get_cv(self, n_folds : int = 5) -> pd.DataFrame:
         
@@ -119,8 +168,14 @@ if __name__ == "__main__":
     prep.get_columns()
     prep.unique_values('Sex')
     
-    prep.compare('Whole weight.1', 'Whole weight.2')
+    #prep.compare('Whole weight.1', 'Whole weight.2')
     prep.cluster_analysis(n_clusters=2)
     prep.pca_analysis()
 
+    prep.add_logs()
+    prep.add_clusters()
+    prep.add_pca_components(n_components=4)
+
     prep.distribution('Whole weight.2')
+
+    print(prep.X_new)

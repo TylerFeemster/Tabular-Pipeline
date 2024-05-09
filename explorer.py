@@ -13,17 +13,17 @@ class Explorer:
     def __init__(self, data: pd.DataFrame,
                  targets: Union[str, list, None] = None) -> None:
         '''
+        This class contains several common methods for exploring a dataframe 
+        without mutating it.
 
-        Args:
-            train: dataframe for exploration
-            targets: prediction columns
+        Arguments:
+            data: dataframe for exploration
+            targets: prediction columns (default: None)
         '''
 
         self.data = data.copy()
 
-        drop_cols = []
         self.targets = []
-        self.y = None
         if targets:
             if type(targets) is str:
                 targets = [targets]
@@ -32,10 +32,7 @@ class Explorer:
             assert set(targets) <= set(data.columns)
             self.targets = targets.copy()
 
-            drop_cols = self.targets
-            self.y = self.data[self.targets]
-
-        self.X = self.data.drop(columns=drop_cols)
+        self.X = self.data.drop(columns=self.targets)
         self.X_cols = self.X.columns
 
         self.cols = self.data.columns
