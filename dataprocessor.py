@@ -6,7 +6,11 @@ from utils import separator, title, subtitle, align_integer
 
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+from sklearn.model_selection import GroupKFold
 
+from explorer import Explorer
+
+from gc import collect
 from typing import Union
 
 ## Handle Missing Values (choice : delete / impute)
@@ -15,10 +19,11 @@ from typing import Union
 ## Cluster Analysis
 ## Feature Generation
 
-class DataProcessor:
+class DataProcessor(Explorer):
     def __init__(self, train_data: pd.DataFrame,
                  test_data: Union[pd.DataFrame, None] = None,
-                 primary_column: Union[str, None] = None) -> None:
+                 primary_column: Union[str, None] = None,
+                 target: Union[str, list, None] = None) -> None:
         '''
 
         Args:
@@ -26,7 +31,6 @@ class DataProcessor:
             test_data: test dataframe (optional)
             primary_column: primary key in dataframes (optional)
         '''
-
         if primary_column:
             # verify primary key is a dataframe column
             assert primary_column in train_data.columns
@@ -35,7 +39,13 @@ class DataProcessor:
             self.train = train_data.copy()
 
         self.targets = []
-        if test_data:
+        if target:
+            if type(target) is list:
+                self.targets = target.copy()
+            else:
+                self.targets = [target]
+        
+        if test_data is not None:
             if primary_column:
                 assert primary_column in test_data.columns
                 self.test = test_data.set_index(primary_column)
@@ -45,9 +55,13 @@ class DataProcessor:
             # verify test columns don't have any new columns
             train_cols = set(train_data.columns)
             test_cols = set(test_data.columns)
-            assert set(test_cols) <= set(train_cols)
-
-            self.targets = list(train_cols - test_cols)
+            assert test_cols <= train_cols, "Some test columns not in train columns."
+            
+            set_difference = train_cols - test_cols
+            assert set(self.targets) <= set_difference, "Targets must be in train set and not test set."
+            
+            if not self.targets:
+                self.targets = list(set_difference)
     
         self.y = train_data[self.targets]
 
@@ -59,176 +73,49 @@ class DataProcessor:
         self.cat_cols = self.X.select_dtypes(include=['object']).columns
         self.num_cols = self.X.select_dtypes(include=['number']).columns
 
-        self.int_cols = self.X.select_dtypes(include=['int']).columns
-        self.flt_cols = self.X.select_dtypes(include=['float']).columns
-
         stats = self.X[self.num_cols].describe().T[['mean', 'std']]
         self.X_norm = (self.X[self.num_cols] - stats['mean']) / stats['std']
 
-### Basic Methods
+        # Explorer
+        super().__init__(train_data, targets=self.targets)
 
-    def datatypes(self, display : bool = True) -> dict:
-        '''
+        # CV Scheme
+        self.cv = None
+        self.n_folds = None
+
+### Preprocessing
+
+    def get_cv(self, n_folds : int = 5) -> pd.DataFrame:
         
-        Args:
-            display: whether or not to print to terminal
-        '''
-        if display:
-            title('Data Types of Variables:')
-            print(self.train.dtypes)
+        if self.cv is not None and \
+            len(self.cv['fold'].unique()) == n_folds:
+            return self.cv
 
-        return self.train.dtypes.to_dict()
+        self.cv = pd.DataFrame(index=self.train.index)
+        gkf = GroupKFold(n_splits=n_folds)
+        for fold, (_, valid_idx) in \
+            enumerate(gkf.split(self.X, self.y, self.train.index)):
+            self.cv.loc[valid_idx, 'Fold'] = fold
 
-    def missing_values(self, display : bool = True) -> Union[dict, None]:
-        '''
+        self.n_folds = n_folds
 
-        Args:
-            display: whether or not to print to terminal
-        '''
-        if display:
-            title('Checking missing values...')
-
-        problem_cols = {}
-        no_missing_values = True
-        for col in self.cols:
-            na_count = self.train[col].isna().sum()
-            if na_count != 0:
-                no_missing_values = False
-                problem_cols[col] = na_count
-
-        if no_missing_values:
-            if display: 
-                print('No missing values found in dataset.')
-            return None
-        
-        # Code below executed only when there is missing data.
-
-        if display:
-            print('Missing values in dataset by feature: ')
-            for key, val in problem_cols.items():
-                print(f'{key} : {val}')
-
-        return problem_cols
-
-### Column Exploration
-
-    def get_columns(self, display : bool = True):
-        if display:
-            title('Columns')
-            for col in self.train.columns:
-                print(col)
-        return self.train.columns
-    
-    def unique_values(self, column : str, display : bool = True):
-        unique_vals = np.sort(self.train[column].unique())
-
-        if display:
-            title(f'Unique values of {column}')
-            print(unique_vals)
-
-        return unique_vals
-    
-    def distribution(self, column : str):
-        title(f'Distribution Visual for {column}')
-        _, (ax1, ax2, ax3) = plt.subplots(nrows=3, ncols=1, figsize=(6, 6),
-                                          gridspec_kw={'height_ratios': [2, 2, 1]})
-        
-        # Histogram (top)
-        sns.histplot(self.train, x=column, stat='proportion', ax=ax1)
-        ax1.set_title(f"Distribution of {column}")
-
-        # Empirical CDF (middle)
-        sns.ecdfplot(self.train, x=column, stat='proportion', ax=ax2)
-        ax2.set_yticks(np.arange(0, 1, 0.25))
-
-        # Box Plot (bottom)
-        sns.boxplot(self.train, x=column, ax=ax3)
-
-        plt.subplots_adjust(hspace=0) # no spacing
-        plt.show()
-        return
-    
-### Global Exploration
-
-    def correlation(self):
-        title('Correlation Heat Map')
-        sns.heatmap(self.train[self.num_cols].corr())
-        return
-
-### Unsupervised Learning
-
-    def pca_analysis(self, n_components : Union[int, None] = None, 
-                     display : bool = True) -> PCA:
-        
-        if n_components and n_components >= len(self.X_norm.columns):
-            n_components = None
-        
-        if display:
-            if n_components:
-                title('Performing pca analysis for top {n_components} components...')
-            else:
-                title('Performing pca analysis with all components...')
-
-        params = {'n_components' : n_components,
-                  'random_state' : 0}
-        pca = PCA(**params).fit(self.X_norm)
-
-        if display:
-            subtitle('Fraction of explained variance:')
-            total = pca.n_components_
-            for i, ratio in enumerate(pca.explained_variance_ratio_):
-                n = align_integer(i, total)
-                print(f'Component {n}: {ratio:.4f}')
-
-        return pca
-
-    def cluster_analysis(self, n_clusters : int = 8, 
-                         display : bool = True) -> KMeans:
-        if display:
-            title(f'Performing cluster analysis with {n_clusters} clusters...')
-
-        # since mean of X_norm is 0, this is inertia for clusters = 1
-        base_inertia = (self.X_norm.to_numpy()**2).sum() # both axes summed
-
-        params = {'n_clusters' : n_clusters,
-                  'random_state' : 0}
-        kmeans = KMeans(**params).fit(self.X_norm)
-
-        if display:
-            print(f'Base Inertia (one cluster): {base_inertia:.3f}')
-            print(f'Inertia with {n_clusters} clusters : {kmeans.inertia_:.3f}')
-            print(f'Ratio : {base_inertia / kmeans.inertia_:.3f}')
-
-        return kmeans
-
-    # TODO: Fix this; maybe add choices manually
-    def compare(self, col1, col2) -> None:
-        assert col1 in self.cols and col2 in self.cols
-
-        # storing boolean values for compact code
-        bool1 = col1 in self.flt_cols 
-        bool2 = col2 in self.flt_cols
-
-        if bool1 and bool2: # both continuous
-            sns.displot(self.train, x=col1, y=col2)
-        elif bool1: # col1 continuous, col2 not
-            sns.displot(self.train, x=col2, y=col1, kind="kde")
-        elif bool2: # col1 not, col2 continuous
-            sns.displot(self.train, x=col1, y=col2, kind="kde")
-        else: # fully categorical or integral
-            sns.displot(self.train, x=col1, y=col2, kind="hist")
-
-        plt.title(f'Comparing {col2} with {col1}')
-        plt.show()
+        collect() # collect garbage
+        return self.cv
 
 if __name__ == "__main__":
     df = pd.read_csv('./data/s4e4/train.csv')
+    test = pd.read_csv('./data/s4e4/test.csv')
 
-    prep = DataProcessor(df, primary_column='id')
+    prep = DataProcessor(df, test_data=test, primary_column='id')
     prep.datatypes()
     prep.missing_values()
     prep.correlation()
-    
+
+    help(prep.missing_values)
+
+    prep.get_cv(n_folds=5)
+    print(prep.cv)
+
     prep.get_columns()
     prep.unique_values('Sex')
     
