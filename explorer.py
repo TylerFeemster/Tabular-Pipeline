@@ -10,6 +10,9 @@ from sklearn.decomposition import PCA
 from typing import Union
 
 class Explorer:
+
+    # TODO : look at predictiveness of clusters
+
     def __init__(self, data: pd.DataFrame,
                  targets: Union[str, list, None] = None) -> None:
         '''
