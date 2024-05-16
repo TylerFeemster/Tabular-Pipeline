@@ -1,8 +1,5 @@
 import pandas as pd
 import numpy as np
-import seaborn as sns
-import matplotlib.pyplot as plt
-from utils import separator, title, subtitle, align_integer
 
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
@@ -209,13 +206,13 @@ class DataProcessor(Explorer):
         collect() # collect garbage
         return
     
-    def get_fold(self, fold : int, dummies : bool = False) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    def get_fold(self, fold : int, dummies : bool = True) -> Tuple[pd.DataFrame]:
 
         if self.n_folds is None:
             print("Warning: CV not set. Setting CV with 5 folds.")
             self.set_cv()
 
-        assert fold < self.n_folds, "Not a valid fold"
+        assert fold < self.n_folds, "Not a valid fold."
 
         valid_idx = self.cv['Fold'] == fold
         train_idx = self.cv['Fold'] != fold
@@ -228,7 +225,7 @@ class DataProcessor(Explorer):
         return (X[train_idx], self.y.loc[train_idx],
                 X[valid_idx], self.y.loc[valid_idx])
     
-    def get_train(self, preprocessed : bool = True, dummies : bool = False):
+    def get_train(self, preprocessed : bool = True, dummies : bool = True):
 
         if not preprocessed:
             return self.train
@@ -266,7 +263,7 @@ class DataProcessor(Explorer):
             self.scale()
         return
     
-    def get_columns(self, dummies : bool = False):
+    def get_columns(self, dummies : bool = True):
         if dummies:
             assert self.train_dum is not None, "Dummies not yet created"
             return [*self.train_num.columns, *self.train_dum.columns]

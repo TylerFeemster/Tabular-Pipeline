@@ -7,16 +7,12 @@ from sklearn.linear_model import LinearRegression
 from dataprocessor import DataProcessor
 from modeler import Modeler
 
-class Ensembler(Modeler):
+class Ensembler:
     def __init__(self, modelers : List[Modeler], data : DataProcessor):
 
         self.n_modelers = len(modelers)
         self.modelers = modelers
-        self.scores = []
         
-        self.predictions = [
-            modeler.cv_predictions() for modeler in self.modelers
-        ]
         self.data = data
         self.validation_sets = []
         for fold in range(self.data.n_folds):
@@ -52,7 +48,7 @@ class Ensembler(Modeler):
         X_scores = np.concatenate([prediction_array[fold,:,:] for fold in self.n_folds], axis=0)
         y_scores = np.stack(self.predictions, axis=0)
 
-        linear = LinearRegression(bias=False).fit(X_scores, y_scores)
+        linear = LinearRegression(fit_intercept=False).fit(X_scores, y_scores)
         self.optimal_weights = linear.coef_
         return [*self.optimal_weights]
     

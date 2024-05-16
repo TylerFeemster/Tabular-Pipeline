@@ -1,15 +1,14 @@
 from typing import Union, Any
 from gc import collect
-
 from utils import title
 
 import pandas as pd
 import numpy as np
+import optuna
 
 from dataprocessor import DataProcessor
 from model import Model
 
-import optuna
 
 HYPERPARAMETER_SPACE = {
     # model : [(param name, min of range, max of range, float?, log?)]
@@ -23,20 +22,28 @@ HYPERPARAMETER_SPACE = {
             ('max_depth', 5, 11, False, False),
             ('num_iterations', 1e2, 1e3, False, True),
             ('num_leaves', 1e1, 1e2, False, True)],
-    'cat': [('depth', 4, 10, False, False),
-            ('n_estimators', 1e2, 1e3, False, True)],
     'hgb': [('learning_rate', 1e-2, 1e-1, True, True),
-            ('max_depth', 4, 10, False, True),
-            ('max_iter', 2e2, 2e3, False, True),
+            ('min_samples_leaf', 10, 50, False, True),
+            ('max_iter', 1e2, 1e3, False, True),
             ('max_bins', 63, 255, False, True)],
-    'rf': [('n_estimators', 2e2, 2e3, False, True),
-           ('max_depth', 3, 8, False, True),
-           ('min_samples_split', 2, 10, False, False),
-           ('max_samples', 1e-1, 1, True, True)],
+    'rf' : [('n_estimators', 1e2, 1e3, False, True),
+            ('max_depth', 3, 10, False, True),
+            ('min_samples_split', 10, 50, False, True),
+            ('max_samples', 5e-2, 5e-1, True, True)],
     'lin': [],
     'rdg': [('alpha', 1e-1, 1e1, True, True)],
     'svm': [('C', 1e-1, 1e1, True, True),
             ('gamma', 1e-2, 1, True, True)]
+}
+
+DEFAULT_PARAMS = {
+    'xgb': {'n_jobs':-1},
+    'lgb': {'verbosity':-1, 'n_jobs':-1},
+    'hgb': {},
+    'rf':  {'n_jobs':-1},
+    'lin': {},
+    'rdg': {},
+    'svm': {}
 }
 
 TOY_PARAMS = {
@@ -49,14 +56,10 @@ TOY_PARAMS = {
             'num_leaves': 50,
             'num_iterations': 250,
             'n_jobs': -1},
-    'cat': {'depth': 6,
-            'n_estimators': 250,
-            'n_jobs': -1},
     'hgb': {'learning_rate': 0.05,
             'max_depth': 6,
             'max_iter': 250,
-            'max_bins': 63,
-            'n_jobs': -1},
+            'max_bins': 63},
     'rf': {'n_estimators': 250,
            'max_depth': 5,
            'min_samples_split': 10,
@@ -75,23 +78,21 @@ class Modeler:
     # The goal is to find optimal features
     # and fix hyperparameters based on CV Scheme
 
-    def __init__(self, model_type: str, data: DataProcessor, params: dict = {},
-                 classify: bool = False, columns: list = [],
+    def __init__(self, 
+                 model_type: str, 
+                 data: DataProcessor,
+                 classify: bool = False,
                  dummies: bool = False) -> None:
 
         assert model_type in HYPERPARAMETER_SPACE, "Not an implemented model type: "\
             + f"Choose from {HYPERPARAMETER_SPACE.keys()}."
 
-        # We want to remember model constructor and parameters, not an instance.
-        self.model = Model(model_type=model_type, params=params,
-                           classification=classify)
+        self.model = Model(model_type=model_type, classify=classify)
 
         self.model_type = model_type
-        self.params = params
         self.classification = classify
 
         self.hyperparams = HYPERPARAMETER_SPACE[model_type]
-        self.columns = columns.copy()
 
         self.data = data
         self.n_folds = self.data.n_folds
@@ -99,11 +100,12 @@ class Modeler:
         self.dummies = dummies
 
         self.toy_params = TOY_PARAMS[model_type]
-
         self.best_params = {}
         return
 
-    def fresh_fit(self, X: pd.DataFrame, y: pd.DataFrame,
+    def fresh_fit(self, 
+                  X: pd.DataFrame, 
+                  y: pd.DataFrame,
                   params: dict = {}) -> Any:
         '''
         Fits new model with (X,y)-data and optionally custom parameters.
@@ -119,7 +121,7 @@ class Modeler:
         collect()  # old instance may be inaccessible now; reclaim memory
         return self.model
 
-    def predict(self, X : pd.DataFrame):
+    def predict(self, X : pd.DataFrame) -> Any:
         '''
         Predicts on X with last created model instance.
         
@@ -128,7 +130,7 @@ class Modeler:
         '''
         return self.model.predict(X)
 
-    def get_fold(self, fold: int):
+    def get_fold(self, fold: int) -> tuple:
         '''
         Given fold, gives train data and validation data. Since the Modeler
         class selects features, it returns the X data on only the selected
@@ -142,7 +144,7 @@ class Modeler:
         Xv = Xv[self.features]
         return (Xt, yt, Xv, yv)
 
-    def best_for_fold(self, fold: int):
+    def best_for_fold(self, fold: int) -> Any:
         '''
         Given fold, fits best model on train data and returns predictions on
         validation data. Ideally, this function should be called after 
@@ -158,7 +160,7 @@ class Modeler:
         self.model.fit(Xt, yt)
         return self.model.predict(Xv)
 
-    def best_for_test(self):
+    def best_for_test(self) -> Any:
         '''
         Fits best model on all train data and returns predictions on test data. 
         Ideally, this function should be called after hyperparameter tuning in 
@@ -187,6 +189,13 @@ class Modeler:
         return self.model.score(X, y)
 
     def leave_one_out(self, col: str = '') -> float:
+        '''
+        Trains and scores model on data with the given column excluded. If no column
+        is given, it trains and scores model on full data.
+
+        Arguments:
+            col: column name to exclude 
+        '''
         error = 0
         for fold in range(self.n_folds):
 
@@ -201,9 +210,14 @@ class Modeler:
         average_error = error / self.n_folds
         return average_error
 
-    # DONE
     def dimension_reduction(self, threshold: float = 0.0, display: bool = True) -> list:
+        '''
+        Iteratively removes features that do not improve model score beyond threshold.
 
+        Arguments:
+            threshold: the minimum improvement in score to justify keeping feature
+            display: whether or not to print info
+        '''
         baseline = self.leave_one_out()
         if display:
             print(f'Baseline: {baseline}')
@@ -223,18 +237,21 @@ class Modeler:
                     full_cycle = False
                     if display:
                         print(f'New Score: {new_score} // Dropping {col} ...')
-
                     collect()  # quick clean-up
                     break
+
                 if display:
                     print(f'Tried {col}.')
 
         return [*self.features]
 
-    # DONE
-    def cv_score_for_tune(self, params: dict) -> float:
+    def __cv_score_tune(self, params: dict) -> float:
         '''
-        cv scheme scoring
+        Given model parameters, this function returns the average score across all 
+        folds on the out-of-fold data. Private method.
+
+        Arguments:
+            params: model parameters
         '''
         total_score = 0
         for fold in range(self.n_folds):
@@ -247,11 +264,19 @@ class Modeler:
         avg_score = total_score / self.n_folds
         return avg_score
 
-    # DONE
-    def objective_for_tune(self, hyperparams: dict, trial: optuna.Trial,
-                           rigid_params: dict = {}):
+    def __objective_tune(self, hyperparams: dict, trial: optuna.Trial,
+                         rigidparams: dict = {}):
+        '''
+        Creates an objective function for optuna trials, given variable hyperparameters
+        and rigid parameters. Private method.
 
-        params = rigid_params.copy()
+        Arguments:
+            hyperparams: hyperparameters from global dictionary for tuning
+            trial: optuna.Trial object
+            rigidparams: hyperparameters that are constant
+        '''
+
+        params = rigidparams.copy()
         for _, param in hyperparams.items():
             name, min, max, flt, log = param
             if flt:
@@ -259,10 +284,16 @@ class Modeler:
             else:
                 params[name] = trial.suggest_int(name, min, max, log=log)
 
-        return self.cv_score_for_tune(params)
+        return self.__cv_score_tune(params)
 
-    # DONE
-    def tune(self, n_trials: int = 50, two_stage: bool = True) -> None:
+    def tune(self, two_stage: bool = True) -> None:
+        '''
+        Uses optuna library to tune hyperparameters. If two_stage is True,
+        it performs a first wave to freeze unimportant hyperparameters.
+
+        Arguments:
+            two_stage: if true, performs two-stage hyperparameter tuning
+        '''
 
         if len(self.hyperparams) == 0:
             self.best_params = {}
@@ -274,7 +305,7 @@ class Modeler:
 
         n_initial = 30
 
-        rigid_params = {'random_state': 0}
+        rigidparams = {}
         hyperparams = {
             param[0]: param for param in self.hyperparams
         }
@@ -283,33 +314,47 @@ class Modeler:
         if two_stage:
             initial_study = optuna.create_study(direction='maximize',
                                                 sampler=optuna.samplers.RandomSampler())
-
+            
+            # creating single-argument callable for study, based on hyperparameters
             def initial_objective(trial):
-                return self.objective_for_tune(hyperparams, trial)
+                return self.__objective_tune(hyperparams, trial)
 
             initial_study.optimize(initial_objective, n_trials=n_initial)
             importances = optuna.importance.get_param_importances(
                 initial_study)
             for param, importance in importances.items():
-                if importance < 1e-1:
+                if importance < 5e-2: # less than 5% of importance
                     del hyperparams[param]
-                    rigid_params[param] = initial_study.best_params[param]
+                    rigidparams[param] = initial_study.best_params[param]
 
         collect()  # quick clean-up
 
         # Main Study
         study = optuna.create_study(direction='maximize',
                                     sampler=optuna.samplers.TPESampler())
-
+        
+        # creating single-argument callable for study, based on hyperparameters
         def objective(trial):
-            return self.objective_for_tune(hyperparams, trial, rigid_params=rigid_params)
+            return self.__objective_tune(hyperparams, trial, rigidparams=rigidparams)
+        
+        n_trials = 15 * len(hyperparams)
+        study.optimize(objective, n_trials = n_trials)
 
-        study.optimize(objective, n_trials=n_trials)
-
-        self.best_params = {**rigid_params, **study.best_params}
+        self.best_params = {**rigidparams, **study.best_params}
         return
 
     def save_predictions(self, save_path: str):
+        '''
+        Saves predictions for test set and each fold to the given path.
+
+        Arguments:
+            save_path: string path of folder in which predictions are saved
+        '''
+
+        # allow flexibility in path notation
+        if save_path[-1] == '/':
+            save_path[-1] == ''
+
         for fold in range(self.n_folds):
             prediction = np.array(self.best_for_fold(fold))
             path = save_path + f'/{self.model_type}_fold_{fold}'
@@ -321,6 +366,14 @@ class Modeler:
         return
 
     def all_at_once(self, save_path: str, loss_threshold: float = 1e-4):
+        '''
+        Performs dimension reduction, hyperparameter tuning, and prediction saving
+        sequentially.
+
+        Arguments:
+            save_path: path for saving predictions
+            loss_threshold: minimum improvement in score to justify keeping feature
+        '''
         title("Dimension Reduction")
         self.dimension_reduction(threshold=loss_threshold)
         title("Hyperparameter Tuning")
