@@ -12,22 +12,20 @@ from gc import collect
 from typing import Union, Tuple
 
 ## Handle Missing Values (choice : delete / impute)
-## Normalize Data
-## PCA Features
-## Cluster Analysis
-## Feature Generation
 
 class DataProcessor(Explorer):
-    def __init__(self, train_data: pd.DataFrame,
+    def __init__(self, 
+                 train_data: pd.DataFrame,
                  test_data: Union[pd.DataFrame, None] = None,
                  primary_column: Union[str, None] = None,
-                 target: Union[str, list, None] = None) -> None:
+                 target: Union[str, list] = []) -> None:
         '''
 
-        Args:
+        Arguments:
             train_data: train dataframe
-            test_data: test dataframe (optional)
-            primary_column: primary key in dataframes (optional)
+            test_data: test dataframe
+            primary_column: primary key in dataframes
+            target: prediction columns
         '''
         if primary_column:
             # verify primary key is a dataframe column
@@ -38,12 +36,12 @@ class DataProcessor(Explorer):
             self.train = train_data.copy()
             self.primary_column = None
 
-        self.targets = []
+        self.target = []
         if target:
             if type(target) is list:
-                self.targets = target.copy()
+                self.target = target.copy()
             else:
-                self.targets = [target]
+                self.target = [target]
         
         self.test = None
         if test_data is not None:
@@ -59,25 +57,28 @@ class DataProcessor(Explorer):
             assert test_cols <= train_cols, "Some test columns not in train columns."
             
             set_difference = train_cols - test_cols
-            assert set(self.targets) <= set_difference, "Targets must be in train set and not test set."
+            assert set(self.target) <= set_difference, "Targets must be in train set and not test set."
             
-            if not self.targets:
-                self.targets = list(set_difference)
+            if not self.target:
+                self.target = list(set_difference)
     
-        self.y = train_data[self.targets]
+        self.y = train_data[self.target]
 
-        self.X = self.train.drop(columns=self.targets)
+        self.X = self.train.drop(columns=self.target)
         self.X_cols = self.X.columns
 
         self.train_num = self.X.select_dtypes(include=['number'])
         self.train_cat = self.X.select_dtypes(include=['object'])
         self.train_dum = None
+
         if self.test is not None:
             self.test_num = self.test.select_dtypes(include=['number'])
             self.test_cat = self.test.select_dtypes(include=['object'])
             self.test_dum = None
 
         self.cols = self.train.columns
+
+        self.has_categorical = len(self.train_cat.columns) > 0
 
         # Unsupervised: use all X available, train and test
         self.X_unsupervised = self.train_num.copy()
@@ -88,8 +89,22 @@ class DataProcessor(Explorer):
         stats = self.X_unsupervised.describe().T
         self.X_unsupervised = (self.X_unsupervised - stats['mean']) / stats['std']
 
+        # multi- or single-target
+        if len(self.target) > 1:
+            self.multi_target = True
+
+        elif self.y.select_dtypes(include=['number']).empty: # case: single column is object
+            # False for binary target, True otherwise
+            self.multi_target = len(self.y[*self.target].unique()) > 2 
+
+        elif len(self.target) == 1: # single column is numeric
+            self.multi_target = False
+            
+        else: # no target columns
+            assert False, "Target columns not given and unable to infer."
+
         # Explorer
-        super().__init__(self.train, targets=self.targets)
+        super().__init__(self.train, target=self.target)
 
         # CV Scheme
         self.cv = None
@@ -134,10 +149,14 @@ class DataProcessor(Explorer):
         return
     
     def add_clusters(self, n_clusters : int = 8) -> None:
-        
+
+        if n_clusters <= 0: return
+
         kmeans = KMeans(n_clusters=n_clusters).fit(self.X_unsupervised)
         self.train_cat['Cluster'] = kmeans.predict(
             self.X_unsupervised.loc[self.X.index]).astype(str) # avoid meaningless numeric
+        
+        self.has_categorical = True # categorical column added
         
         if self.test is not None:
             self.test_cat['Cluster'] = kmeans.predict(
@@ -157,6 +176,8 @@ class DataProcessor(Explorer):
 ### Preprocessing
 
     def make_dummies(self):
+
+        if not self.has_categorical: return
 
         self.train_dum = pd.get_dummies(self.train_cat, dtype=int)
         if self.test is not None:
@@ -206,6 +227,8 @@ class DataProcessor(Explorer):
         collect() # collect garbage
         return
     
+### Retrieving Data
+
     def get_fold(self, fold : int, dummies : bool = True) -> Tuple[pd.DataFrame]:
 
         if self.n_folds is None:
@@ -217,7 +240,7 @@ class DataProcessor(Explorer):
         valid_idx = self.cv['Fold'] == fold
         train_idx = self.cv['Fold'] != fold
 
-        if dummies:
+        if dummies and self.has_categorical:
             X = pd.concat([self.train_num, self.train_dum], axis=1)
         else:
             X = pd.concat([self.train_num, self.train_cat], axis=1)
@@ -230,24 +253,33 @@ class DataProcessor(Explorer):
         if not preprocessed:
             return self.train
         
-        if dummies:
+        if dummies and self.has_categorical:
             X = pd.concat([self.train_num, self.train_dum], axis=1)
         else:
             X = pd.concat([self.train_num, self.train_cat], axis=1)
 
         return (X, self.y)
     
-    def get_test(self, preprocessed : bool = True, dummies : bool = False):
+    def get_test(self, preprocessed : bool = True, dummies : bool = True):
 
         if not preprocessed:
             return self.test
         
-        if dummies:
+        if dummies and self.has_categorical:
             X = pd.concat([self.test_num, self.test_dum], axis=1)
         else:
             X = pd.concat([self.test_num, self.test_cat], axis=1)
 
         return X
+    
+    def test_indices(self) -> pd.DataFrame:
+        indices = self.test.index
+        return pd.DataFrame(indices, columns=[self.primary_column])
+    
+    def get_columns(self, dummies : bool = True):
+        if dummies and self.has_categorical:
+            return [*self.train_num.columns, *self.train_dum.columns]
+        return [*self.train_num.columns, *self.train_cat.columns]
     
 ### Preprocess all at once
 
@@ -262,12 +294,6 @@ class DataProcessor(Explorer):
         if scale:
             self.scale()
         return
-    
-    def get_columns(self, dummies : bool = True):
-        if dummies:
-            assert self.train_dum is not None, "Dummies not yet created"
-            return [*self.train_num.columns, *self.train_dum.columns]
-        return [*self.train_num.columns, *self.train_cat.columns]
 
 if __name__ == "__main__":
     df = pd.read_csv('./data/s4e5/train.csv')

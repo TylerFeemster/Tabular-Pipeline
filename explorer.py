@@ -6,36 +6,38 @@ from utils import title, subtitle, align_integer
 
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
+from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
 
 from typing import Union
 
 class Explorer:
 
-    # TODO : look at predictiveness of clusters
-
     def __init__(self, data: pd.DataFrame,
-                 targets: Union[str, list, None] = None) -> None:
+                 classify: bool = False,
+                 target: Union[str, list] = []) -> None:
         '''
         This class contains several common methods for exploring a dataframe 
         without mutating it.
 
         Arguments:
             data: dataframe for exploration
-            targets: prediction columns (default: None)
+            classify: classification when True, regression when False
+            target: prediction columns
         '''
 
         self.data = data.copy()
+        self.classify = classify
 
-        self.targets = []
-        if targets:
-            if type(targets) is str:
-                targets = [targets]
+        self.target = []
+        if target:
+            if type(target) is str:
+                target = [target]
 
             # verify target(s) are in dataframe columns
-            assert set(targets) <= set(data.columns)
-            self.targets = targets.copy()
+            assert set(target) <= set(data.columns)
+            self.target = target.copy()
 
-        self.X = self.data.drop(columns=self.targets)
+        self.X = self.data.drop(columns=self.target)
         self.X_cols = self.X.columns
 
         self.cols = self.data.columns
@@ -58,7 +60,7 @@ class Explorer:
         train dataframe. It also prints this info by default.
 
         Arguments:
-            display: whether or not to print (default: True)
+            display: whether or not to print
         '''
         if display:
             title('Data Types of Variables:')
@@ -73,7 +75,7 @@ class Explorer:
         It also prints this info by default.
 
         Arguments:
-            display: whether or not to print (default: True)
+            display: whether or not to print
         '''
         if display:
             title('Checking missing values...')
@@ -103,7 +105,7 @@ class Explorer:
         Returns list of features/columns. It also prints this info by default.
 
         Arguments:
-            display: whether or not to print (default: True)
+            display: whether or not to print
         '''
         if display:
             title('Columns')
@@ -119,8 +121,8 @@ class Explorer:
         default.
 
         Arguments:
-            column: the column whose unique values we want (default: None)
-            display: whether or not to print (default: True)
+            column: the column whose unique values we want
+            display: whether or not to print
         '''
 
         if column:
@@ -197,8 +199,8 @@ class Explorer:
         the function prints the fraction of explained variance for each component.
 
         Arguments:
-            n_components: number of components; None means all (default: None)
-            display: whether to print info or not (default: True)
+            n_components: number of components; None means all
+            display: whether to print info or not
         '''
 
         if n_components and n_components >= len(self.X_norm.columns):
@@ -230,8 +232,8 @@ class Explorer:
         ratio to help with any analyses.
 
         Arguments:
-            n_clusters: number of clusters (default: 8)
-            display: whether or not to print info (default: True)
+            n_clusters: number of clusters
+            display: whether or not to print info
         '''
         
         if display:
@@ -307,6 +309,47 @@ class Explorer:
         plt.title(f'{col2} - {col1} Relationship')
         plt.show()
         return
+    
+    def mutual_info(self, column: str, display: bool = True) -> dict:
+        '''
+        Calculates mutual information between given column and all numeric
+        columns.
+
+        Arguments:
+            column: feature with which to calculate each mutual information
+            display: whether or not to print info
+        '''
+
+        if display:
+            title(f'Mutual Info with {column}')
+
+        numeric = self.data.select_dtypes(include=['number'])
+        X = numeric.drop(columns=[column])
+        y = numeric[column]
+
+        if self.classify:
+            mutual_info = mutual_info_classif(X, y)
+        else:
+            mutual_info = mutual_info_regression(X, y)
+
+        mi_map = {}
+        for mi, col in zip(mutual_info, X.columns):
+            mi_map[col] = mi
+            if display:
+                print(f'{col} ... {mi : .4f}')
+
+    def target_mutual_info(self, display : bool = True) -> None:
+        '''
+        Calculate mutual information of each column relative to each target.
+
+        Arguments:
+            display: whether or not to print info
+        '''
+        for target in self.target:
+            self.mutual_info(target, display=display)
+
+        return
+
 
 if __name__ == "__main__":
     df = pd.read_csv('./data/s4e4/train.csv')
@@ -323,5 +366,7 @@ if __name__ == "__main__":
     Explorer(pd.read_csv('./data/s4e5/train.csv')).compare('FloodProbability', 'PoliticalFactors')
     prep.cluster_analysis(n_clusters=2)
     prep.pca_analysis()
+
+    prep.mutual_info('Whole weight.1')
 
     #prep.distribution('Whole weight.2')

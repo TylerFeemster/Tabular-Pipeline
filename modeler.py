@@ -2,13 +2,13 @@ from typing import Union, Any
 from gc import collect
 from utils import title
 
+import joblib
 import pandas as pd
 import numpy as np
 import optuna
 
 from dataprocessor import DataProcessor
 from model import Model
-
 
 HYPERPARAMETER_SPACE = {
     # model : [(param name, min of range, max of range, float?, log?)]
@@ -55,7 +55,8 @@ TOY_PARAMS = {
     'lgb': {'learning_rate': 0.05,
             'num_leaves': 50,
             'num_iterations': 250,
-            'n_jobs': -1},
+            'n_jobs':-1,
+            'verbosity':-1},
     'hgb': {'learning_rate': 0.05,
             'max_depth': 6,
             'max_iter': 250,
@@ -67,57 +68,59 @@ TOY_PARAMS = {
            'n_jobs': -1},
     'lin': {},
     'rdg': {'alpha': 1},
-    'svm': {'C': 1,
-            'gamma': 0.1}
+    'svm': {'gamma': 0.1}
 }
 
-
 class Modeler:
-
-    # Modeler represents a single model
-    # The goal is to find optimal features
-    # and fix hyperparameters based on CV Scheme
 
     def __init__(self, 
                  model_type: str, 
                  data: DataProcessor,
-                 classify: bool = False,
-                 dummies: bool = False) -> None:
+                 goal: str) -> None:
 
+        # Verify model type is supported.
         assert model_type in HYPERPARAMETER_SPACE, "Not an implemented model type: "\
             + f"Choose from {HYPERPARAMETER_SPACE.keys()}."
-
-        self.model = Model(model_type=model_type, classify=classify)
+        
+        # Determine if multi- or single-target
+        self.multi_target = data.multi_target
+        
+        # Determine classification / regression
+        assert goal in ['C', 'R', 'c', 'r'], "Goal must be 'C' or 'R' for classification or regression."
+        self.classify = goal in ['C', 'c']
 
         self.model_type = model_type
-        self.classification = classify
+        self.model = Model(model_type=model_type, classify=self.classify, multiple_targets=self.multi_target)
 
+        self.params = DEFAULT_PARAMS[model_type]
         self.hyperparams = HYPERPARAMETER_SPACE[model_type]
 
         self.data = data
         self.n_folds = self.data.n_folds
-        self.features = self.data.get_columns(dummies=dummies)
-        self.dummies = dummies
-
+        self.features = self.data.get_columns(dummies=True)
         self.toy_params = TOY_PARAMS[model_type]
-        self.best_params = {}
+        self.best_params = {**self.params}
         return
 
-    def fresh_fit(self, 
-                  X: pd.DataFrame, 
-                  y: pd.DataFrame,
-                  params: dict = {}) -> Any:
+    def fit(self, 
+            X: pd.DataFrame, 
+            y: pd.DataFrame,
+            params: Union[dict, None] = None) -> Any:
         '''
         Fits new model with (X,y)-data and optionally custom parameters.
 
         Arguments:
             X: pandas dataframe for input data
             y: pandas dataframe for target / output data
-            params: custom parameters (default: {})
+            params: custom parameters
         '''
+        if params is None:
+            params=self.params
+
         self.model = Model(self.model_type, params=params,
-                           classification=self.classification)
+                           classify=self.classify)
         self.model.fit(X, y)
+        
         collect()  # old instance may be inaccessible now; reclaim memory
         return self.model
 
@@ -128,6 +131,7 @@ class Modeler:
         Arguments:
             X: pandas dataframe used to generate predictions
         '''
+
         return self.model.predict(X)
 
     def get_fold(self, fold: int) -> tuple:
@@ -139,7 +143,8 @@ class Modeler:
         Arguments:
             fold: fold of cross-validation, 0-indexed
         '''
-        Xt, yt, Xv, yv = self.data.get_fold(fold, dummies=self.dummies)
+
+        Xt, yt, Xv, yv = self.data.get_fold(fold, dummies=True)
         Xt = Xt[self.features]
         Xv = Xv[self.features]
         return (Xt, yt, Xv, yv)
@@ -154,9 +159,10 @@ class Modeler:
         Arguments:
             fold: cross validation fold, 0-indexed
         '''
+
         Xt, yt, Xv, _ = self.get_fold(fold)
         self.model = Model(model_type=self.model_type, params=self.best_params,
-                           classification=self.classification)
+                           classify=self.classify)
         self.model.fit(Xt, yt)
         return self.model.predict(Xv)
 
@@ -170,11 +176,12 @@ class Modeler:
         Arguments:
             None
         '''
-        Xt, yt = self.data.get_train(preprocessed=True, dummies=self.dummies)
+
+        Xt, yt = self.data.get_train(preprocessed=True, dummies=True)
         self.model = Model(model_type=self.model_type, params=self.best_params,
-                           classification=self.classification)
+                           classify=self.classify)
         self.model.fit(Xt, yt)
-        Xtest = self.data.get_test(preprocessed=True, dummies=self.dummies)
+        Xtest = self.data.get_test(preprocessed=True, dummies=True)
         return self.model.predict(Xtest)
 
     def score(self, X: pd.DataFrame, y: pd.DataFrame) -> float:
@@ -186,6 +193,7 @@ class Modeler:
             X: pandas dataframe used to generate predictions
             y: pandas dataframe with outputs to score against predictions
         '''
+
         return self.model.score(X, y)
 
     def leave_one_out(self, col: str = '') -> float:
@@ -196,6 +204,7 @@ class Modeler:
         Arguments:
             col: column name to exclude 
         '''
+
         error = 0
         for fold in range(self.n_folds):
 
@@ -204,7 +213,7 @@ class Modeler:
                 Xt = Xt.drop(columns=[col])
                 Xv = Xv.drop(columns=[col])
 
-            self.fresh_fit(Xt, yt, params=self.toy_params)
+            self.fit(Xt, yt, params=self.toy_params)
             error += self.score(Xv, yv)
 
         average_error = error / self.n_folds
@@ -218,6 +227,7 @@ class Modeler:
             threshold: the minimum improvement in score to justify keeping feature
             display: whether or not to print info
         '''
+
         baseline = self.leave_one_out()
         if display:
             print(f'Baseline: {baseline}')
@@ -244,6 +254,8 @@ class Modeler:
                     print(f'Tried {col}.')
 
         return [*self.features]
+    
+## Tuning
 
     def __cv_score_tune(self, params: dict) -> float:
         '''
@@ -253,12 +265,13 @@ class Modeler:
         Arguments:
             params: model parameters
         '''
+
         total_score = 0
         for fold in range(self.n_folds):
 
             Xt, yt, Xv, yv = self.get_fold(fold)
 
-            self.fresh_fit(Xt, yt, params=params)
+            self.fit(Xt, yt, params=params)
             total_score += self.score(Xv, yv)
 
         avg_score = total_score / self.n_folds
@@ -296,7 +309,6 @@ class Modeler:
         '''
 
         if len(self.hyperparams) == 0:
-            self.best_params = {}
             return
 
         # no need to eliminate hyperparams if there's only one
@@ -305,7 +317,7 @@ class Modeler:
 
         n_initial = 30
 
-        rigidparams = {}
+        rigidparams = {**self.params}
         hyperparams = {
             param[0]: param for param in self.hyperparams
         }
@@ -323,7 +335,7 @@ class Modeler:
             importances = optuna.importance.get_param_importances(
                 initial_study)
             for param, importance in importances.items():
-                if importance < 5e-2: # less than 5% of importance
+                if importance < 1e-1: # less than 10% of importance
                     del hyperparams[param]
                     rigidparams[param] = initial_study.best_params[param]
 
@@ -341,6 +353,36 @@ class Modeler:
         study.optimize(objective, n_trials = n_trials)
 
         self.best_params = {**rigidparams, **study.best_params}
+        return
+
+    def save_model(self, save_path: str) -> None:
+        '''
+        Saves model to save path.
+        
+        Arguments:
+            save_path: path on disk to save model
+        '''
+
+        # allow flexibility in path notation
+        if save_path[-1] == '/':
+            save_path[-1] == ''
+
+        joblib.dump(self.model, f'{save_path}/model_{self.model_type}')
+        return
+    
+    def load_model(self, load_path: str) -> None:
+        '''
+        Loads previously saved model from load path.
+
+        Arguments:
+            load_path: path on disk where model is located
+        '''
+
+        # allow flexibility in path notation
+        if load_path[-1] == '/':
+            load_path[-1] == ''
+
+        self.model = joblib.load(f'{load_path}/model_{self.model_type}')
         return
 
     def save_predictions(self, save_path: str):
@@ -374,24 +416,40 @@ class Modeler:
             save_path: path for saving predictions
             loss_threshold: minimum improvement in score to justify keeping feature
         '''
+
         title("Dimension Reduction")
         self.dimension_reduction(threshold=loss_threshold)
+
         title("Hyperparameter Tuning")
         self.tune()
+
         title("Saving Predictions")
         self.save_predictions(save_path)
+
         collect()
         return
 
-
 if __name__ == "__main__":
 
-    train = pd.read_csv('./data/s4e5/train.csv').loc[:8000]
-    test = pd.read_csv('./data/s4e5/test.csv')
+    #train = pd.read_csv('./data/s4e5/train.csv').loc[:8000]
+    #test = pd.read_csv('./data/s4e5/test.csv')
+    #data = DataProcessor(train, test_data=test, primary_column='id')
+    #data.preprocess(n_clusters=3)
+    #data.set_cv()
+
+    #xgboost = Modeler("xgb", data, goal='r')
+    #xgboost.dimension_reduction()
+    #xgboost.tune()
+
+    train = pd.read_csv('./data/s4e3/train.csv')
+    test = pd.read_csv('./data/s4e3/test.csv')
     data = DataProcessor(train, test_data=test, primary_column='id')
-    data.preprocess(n_clusters=3)
     data.set_cv()
 
-    xgboost = Modeler("xgb", data, dummies=True)
-    xgboost.dimension_reduction()
-    xgboost.tune()
+    Xt, yt, Xv, yv = data.get_fold(0)
+
+    for modeltype in HYPERPARAMETER_SPACE:
+        model = Modeler(modeltype, data, goal='c')
+        model.fit(Xt, yt)
+        print(f'{modeltype} : {model.score(Xv, yv) : .4f}')
+

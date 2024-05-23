@@ -25,3 +25,9 @@ def align_integer(i : int, total : int):
     for idx in range(len(s)):
         aligned[difference + idx] = s[idx]
     return "".join(aligned)
+
+import torch
+
+@staticmethod
+def gpu_available():
+    return torch.cuda.is_available()
