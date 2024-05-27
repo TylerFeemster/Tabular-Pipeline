@@ -1,111 +1,60 @@
-from typing import Union, Any
+from typing import Union, Tuple, Any, Dict, List
 from gc import collect
 from utils import title
+import json
 
-import joblib
+import xgboost as xgb
+from xgboost import DMatrix
+
+from sklearn.metrics import r2_score, log_loss
+
 import pandas as pd
+from pandas import DataFrame
 import numpy as np
 import optuna
 
 from dataprocessor import DataProcessor
-from model import Model
+from model_info import ModelInfo
 
-HYPERPARAMETER_SPACE = {
-    # model : [(param name, min of range, max of range, float?, log?)]
-    'xgb': [('learning_rate', 1e-2, 1e-1, True, True),
-            ('max_depth', 4, 10, False, True),
-            ('n_estimators', 1e2, 1e3, False, True),
-            ('subsample', 2e-1, 1, True, True),
-            ('lambda', 1, 1e2, True, True),
-            ('alpha', 1e-8, 1e-2, True, True)],
-    'lgb': [('learning_rate', 1e-2, 1e-1, True, True),
-            ('max_depth', 5, 11, False, False),
-            ('num_iterations', 1e2, 1e3, False, True),
-            ('num_leaves', 1e1, 1e2, False, True)],
-    'hgb': [('learning_rate', 1e-2, 1e-1, True, True),
-            ('min_samples_leaf', 10, 50, False, True),
-            ('max_iter', 1e2, 1e3, False, True),
-            ('max_bins', 63, 255, False, True)],
-    'rf' : [('n_estimators', 1e2, 1e3, False, True),
-            ('max_depth', 3, 10, False, True),
-            ('min_samples_split', 10, 50, False, True),
-            ('max_samples', 5e-2, 5e-1, True, True)],
-    'lin': [],
-    'rdg': [('alpha', 1e-1, 1e1, True, True)],
-    'svm': [('C', 1e-1, 1e1, True, True),
-            ('gamma', 1e-2, 1, True, True)]
-}
-
-DEFAULT_PARAMS = {
-    'xgb': {'n_jobs':-1},
-    'lgb': {'verbosity':-1, 'n_jobs':-1},
-    'hgb': {},
-    'rf':  {'n_jobs':-1},
-    'lin': {},
-    'rdg': {},
-    'svm': {}
-}
-
-TOY_PARAMS = {
-    'xgb': {'learning_rate': 0.05,
-            'max_depth': 7,
-            'n_estimators': 250,
-            'subsample': 0.7,
-            'n_jobs': -1},
-    'lgb': {'learning_rate': 0.05,
-            'num_leaves': 50,
-            'num_iterations': 250,
-            'n_jobs':-1,
-            'verbosity':-1},
-    'hgb': {'learning_rate': 0.05,
-            'max_depth': 6,
-            'max_iter': 250,
-            'max_bins': 63},
-    'rf': {'n_estimators': 250,
-           'max_depth': 5,
-           'min_samples_split': 10,
-           'max_samples': 0.1,
-           'n_jobs': -1},
-    'lin': {},
-    'rdg': {'alpha': 1},
-    'svm': {'gamma': 0.1}
-}
 
 class Modeler:
 
-    def __init__(self, 
-                 model_type: str, 
+    def __init__(self,
+                 model: str,
                  data: DataProcessor,
-                 goal: str) -> None:
+                 goal: str,
+                 device: Union[str, None] = None) -> None:
 
-        # Verify model type is supported.
-        assert model_type in HYPERPARAMETER_SPACE, "Not an implemented model type: "\
-            + f"Choose from {HYPERPARAMETER_SPACE.keys()}."
-        
-        # Determine if multi- or single-target
-        self.multi_target = data.multi_target
-        
-        # Determine classification / regression
-        assert goal in ['C', 'R', 'c', 'r'], "Goal must be 'C' or 'R' for classification or regression."
-        self.classify = goal in ['C', 'c']
+        assert goal in ['reg', 'clf', 'mclf'], \
+            "goal must be \'reg\', \'clf\', or \'mclf\'."
+        match goal:
+            case 'reg':
+                objective = 'reg:squarederror'
+                self.criterion = r2_score
+                self.direction = 'maximize'
 
-        self.model_type = model_type
-        self.model = Model(model_type=model_type, classify=self.classify, multiple_targets=self.multi_target)
+            case 'clf':
+                objective = 'binary:logistic'
+                self.criterion = log_loss
+                self.direction = 'minimize'
 
-        self.params = DEFAULT_PARAMS[model_type]
-        self.hyperparams = HYPERPARAMETER_SPACE[model_type]
+            case 'mclf':
+                objective = 'multi:softmax'
+                self.criterion = log_loss
+                self.direction = 'minimize'
 
+        self.info = ModelInfo(model, device=device, objective=objective)
+        self.model = model
+
+        self.instance = None
         self.data = data
-        self.n_folds = self.data.n_folds
         self.features = self.data.get_columns(dummies=True)
-        self.toy_params = TOY_PARAMS[model_type]
-        self.best_params = {**self.params}
         return
 
-    def fit(self, 
-            X: pd.DataFrame, 
-            y: pd.DataFrame,
-            params: Union[dict, None] = None) -> Any:
+    def fit(self,
+            data: DMatrix,
+            params: Union[dict, None] = None,
+            num_boost_round: Union[int, None] = None) -> None:
         '''
         Fits new model with (X,y)-data and optionally custom parameters.
 
@@ -114,46 +63,46 @@ class Modeler:
             y: pandas dataframe for target / output data
             params: custom parameters
         '''
+
+        default_params, default_num_boost_round = self.info.minimal_parameters()
         if params is None:
-            params=self.params
+            params = default_params
+        if num_boost_round is None:
+            num_boost_round = default_num_boost_round
 
-        self.model = Model(self.model_type, params=params,
-                           classify=self.classify)
-        self.model.fit(X, y)
-        
-        collect()  # old instance may be inaccessible now; reclaim memory
-        return self.model
+        self.instance = xgb.train(params, data, num_boost_round)
+        return self.instance
 
-    def predict(self, X : pd.DataFrame) -> Any:
+    def predict(self, X: DataFrame) -> Any:
         '''
         Predicts on X with last created model instance.
-        
+
         Arguments:
             X: pandas dataframe used to generate predictions
         '''
 
-        return self.model.predict(X)
+        dtest = DMatrix(X)
+        return self.instance.predict(dtest)
 
-    def get_fold(self, fold: int) -> tuple:
+    def get_fold(self, fold: int) -> Tuple[DataFrame, DataFrame, DataFrame, DataFrame]:
         '''
         Given fold, gives train data and validation data. Since the Modeler
         class selects features, it returns the X data on only the selected
         features.
-        
+
         Arguments:
             fold: fold of cross-validation, 0-indexed
         '''
 
         Xt, yt, Xv, yv = self.data.get_fold(fold, dummies=True)
-        Xt = Xt[self.features]
-        Xv = Xv[self.features]
-        return (Xt, yt, Xv, yv)
+
+        return Xt[self.features], yt, Xv[self.features], yv
 
     def best_for_fold(self, fold: int) -> Any:
         '''
         Given fold, fits best model on train data and returns predictions on
-        validation data. Ideally, this function should be called after 
-        hyperparameter tuning in order for best parameters to be determined. 
+        validation data. Ideally, this function should be called after
+        hyperparameter tuning in order for best parameters to be determined.
         If not, the best parameters are taken to be the default parameters.
 
         Arguments:
@@ -161,15 +110,18 @@ class Modeler:
         '''
 
         Xt, yt, Xv, _ = self.get_fold(fold)
-        self.model = Model(model_type=self.model_type, params=self.best_params,
-                           classify=self.classify)
-        self.model.fit(Xt, yt)
-        return self.model.predict(Xv)
+
+        dtrain = DMatrix(Xt, yt)
+        dfold = DMatrix(Xv)
+        params, num_boost_round = self.info.get_best_parameters()
+
+        self.fit(dtrain, params=params, num_boost_round=num_boost_round)
+        return self.instance.predict(dfold)
 
     def best_for_test(self) -> Any:
         '''
-        Fits best model on all train data and returns predictions on test data. 
-        Ideally, this function should be called after hyperparameter tuning in 
+        Fits best model on all train data and returns predictions on test data.
+        Ideally, this function should be called after hyperparameter tuning in
         order for best parameters to be determined. If not, the best parameters
         are taken to be the default parameters.
 
@@ -177,24 +129,48 @@ class Modeler:
             None
         '''
 
-        Xt, yt = self.data.get_train(preprocessed=True, dummies=True)
-        self.model = Model(model_type=self.model_type, params=self.best_params,
-                           classify=self.classify)
-        self.model.fit(Xt, yt)
-        Xtest = self.data.get_test(preprocessed=True, dummies=True)
-        return self.model.predict(Xtest)
+        params, num_boost_round = self.info.get_best_parameters()
 
-    def score(self, X: pd.DataFrame, y: pd.DataFrame) -> float:
+        Xt, yt = self.data.get_train(preprocessed=True, dummies=True)
+        dtrain = DMatrix(Xt, yt)
+
+        Xtest = self.data.get_test(preprocessed=True, dummies=True)
+        dtest = DMatrix(Xtest)
+
+        self.fit(dtrain, params=params, num_boost_round=num_boost_round)
+        return self.instance.predict(dtest)
+
+    def score(self, X: DataFrame, y: DataFrame) -> float:
         '''
-        Uses (X,y)-data on last model instance to make predictions and 
+        Uses (X,y)-data on last model instance to make predictions and
         returns a score.
 
         Arguments:
             X: pandas dataframe used to generate predictions
             y: pandas dataframe with outputs to score against predictions
         '''
+        data = DMatrix(X)
+        prediction = self.instance.predict(data)
+        return self.criterion(y, prediction)
 
-        return self.model.score(X, y)
+### Feature Selection
+
+    def feature_importances(self) -> Dict[str, float]:
+
+        importances = self.instance.get_score(importance_type='total_gain')
+        for col in self.features:
+            if col not in importances:
+                importances[col] = 0.0
+
+        return importances
+
+    def __ascending_features(self) -> List[str]:
+
+        importances = self.feature_importances()
+        ascending = np.argsort(list(importances.values()))[::-1]
+        keys = list(importances.keys())
+        ascending_features = [keys[i] for i in ascending]
+        return ascending_features
 
     def leave_one_out(self, col: str = '') -> float:
         '''
@@ -202,21 +178,25 @@ class Modeler:
         is given, it trains and scores model on full data.
 
         Arguments:
-            col: column name to exclude 
+            col: column name to exclude
         '''
 
+        params, num_boost_round = self.info.feature_selection_parameters()
+
         error = 0
-        for fold in range(self.n_folds):
+        for fold in range(self.data.n_folds):
 
             Xt, yt, Xv, yv = self.get_fold(fold)
             if col:
                 Xt = Xt.drop(columns=[col])
                 Xv = Xv.drop(columns=[col])
 
-            self.fit(Xt, yt, params=self.toy_params)
+            dtrain = DMatrix(Xt, yt)
+            self.fit(dtrain, params=params, num_boost_round=num_boost_round)
+
             error += self.score(Xv, yv)
 
-        average_error = error / self.n_folds
+        average_error = error / self.data.n_folds
         return average_error
 
     def dimension_reduction(self, threshold: float = 0.0, display: bool = True) -> list:
@@ -230,36 +210,39 @@ class Modeler:
 
         baseline = self.leave_one_out()
         if display:
-            print(f'Baseline: {baseline}')
+            print(f'Baseline: {baseline:.6f}')
         full_cycle = False
-        cycle_columns = self.features[::-1]
+        cycle_columns = self.__ascending_features()
         while not full_cycle:
             full_cycle = True
-            for i, col in enumerate(cycle_columns):
+            for col in cycle_columns:
                 new_score = self.leave_one_out(col)
                 diff = baseline - new_score
+                
+                if self.direction == 'minimize':
+                    diff = -diff
 
                 if diff < threshold:
                     self.features.remove(col)
-                    # restarting cycle at next column
-                    cycle_columns = [*cycle_columns[i+1:], *cycle_columns[:i]]
+                    cycle_columns = self.__ascending_features()
                     baseline = new_score
                     full_cycle = False
                     if display:
-                        print(f'New Score: {new_score} // Dropping {col} ...')
+                        print(f'New Score: {new_score:.6f} || Dropping {col} ...')
                     collect()  # quick clean-up
                     break
 
                 if display:
                     print(f'Tried {col}.')
-
+        
+        collect() # quick clean-up
         return [*self.features]
-    
-## Tuning
 
-    def __cv_score_tune(self, params: dict) -> float:
+### Tuning
+
+    def __cv_score_tune(self, params: dict, num_boost_round: int) -> float:
         '''
-        Given model parameters, this function returns the average score across all 
+        Given model parameters, this function returns the average score across all
         folds on the out-of-fold data. Private method.
 
         Arguments:
@@ -267,98 +250,51 @@ class Modeler:
         '''
 
         total_score = 0
-        for fold in range(self.n_folds):
+        for fold in range(self.data.n_folds):
 
             Xt, yt, Xv, yv = self.get_fold(fold)
 
-            self.fit(Xt, yt, params=params)
+            dtrain = DMatrix(Xt, yt)
+            self.fit(dtrain, params=params, num_boost_round=num_boost_round)
             total_score += self.score(Xv, yv)
 
-        avg_score = total_score / self.n_folds
+        avg_score = total_score / self.data.n_folds
         return avg_score
 
-    def __objective_tune(self, hyperparams: dict, trial: optuna.Trial,
-                         rigidparams: dict = {}):
+    def __optuna_objective(self, trial: optuna.Trial):
         '''
-        Creates an objective function for optuna trials, given variable hyperparameters
-        and rigid parameters. Private method.
+        Creates an objective function for optuna trials based on underlying 
+        parameters.
 
         Arguments:
-            hyperparams: hyperparameters from global dictionary for tuning
             trial: optuna.Trial object
-            rigidparams: hyperparameters that are constant
         '''
 
-        params = rigidparams.copy()
-        for _, param in hyperparams.items():
-            name, min, max, flt, log = param
-            if flt:
-                params[name] = trial.suggest_float(name, min, max, log=log)
-            else:
-                params[name] = trial.suggest_int(name, min, max, log=log)
+        parameters, num_boost_round = self.info.trial_parameters(trial)
+        return self.__cv_score_tune(parameters, num_boost_round)
 
-        return self.__cv_score_tune(params)
-
-    def tune(self, two_stage: bool = True) -> None:
+    def tune(self, n_trials : int = 100) -> None:
         '''
-        Uses optuna library to tune hyperparameters. If two_stage is True,
-        it performs a first wave to freeze unimportant hyperparameters.
+        Uses optuna library to tune hyperparameters.
 
         Arguments:
-            two_stage: if true, performs two-stage hyperparameter tuning
+            n_trials: number of trials
         '''
 
-        if len(self.hyperparams) == 0:
-            return
-
-        # no need to eliminate hyperparams if there's only one
-        if len(self.hyperparams) == 1:
-            two_stage = False
-
-        n_initial = 30
-
-        rigidparams = {**self.params}
-        hyperparams = {
-            param[0]: param for param in self.hyperparams
-        }
-
-        # Inital Pass
-        if two_stage:
-            initial_study = optuna.create_study(direction='maximize',
-                                                sampler=optuna.samplers.RandomSampler())
-            
-            # creating single-argument callable for study, based on hyperparameters
-            def initial_objective(trial):
-                return self.__objective_tune(hyperparams, trial)
-
-            initial_study.optimize(initial_objective, n_trials=n_initial)
-            importances = optuna.importance.get_param_importances(
-                initial_study)
-            for param, importance in importances.items():
-                if importance < 1e-1: # less than 10% of importance
-                    del hyperparams[param]
-                    rigidparams[param] = initial_study.best_params[param]
-
-        collect()  # quick clean-up
-
-        # Main Study
-        study = optuna.create_study(direction='maximize',
+        study = optuna.create_study(direction=self.direction,
                                     sampler=optuna.samplers.TPESampler())
-        
-        # creating single-argument callable for study, based on hyperparameters
-        def objective(trial):
-            return self.__objective_tune(hyperparams, trial, rigidparams=rigidparams)
-        
-        n_trials = 15 * len(hyperparams)
-        study.optimize(objective, n_trials = n_trials)
 
-        self.best_params = {**rigidparams, **study.best_params}
+        study.optimize(self.__optuna_objective, n_trials=n_trials)
+
+        self.info.set_best_parameters(study.best_params)
         return
+
+### Save/Load
 
     def save_model(self, save_path: str) -> None:
         '''
         Saves model to save path.
-        
+
         Arguments:
             save_path: path on disk to save model
         '''
@@ -367,9 +303,18 @@ class Modeler:
         if save_path[-1] == '/':
             save_path[-1] == ''
 
-        joblib.dump(self.model, f'{save_path}/model_{self.model_type}')
+        self.instance.save_model(f'{save_path}/model_{self.model}.json')
+        self.instance.save_config(f'{save_path}/config_{self.model}.json')
+
+        class_config = {'features' : [*self.features],
+                        'best_params' : {**self.info.best_params},
+                        'best_boost' : self.info.best_boost}
+        
+        with open(f'{save_path}/class_config_{self.model}.json', 'w') as fn:
+            json.dump(class_config, fn)
+
         return
-    
+
     def load_model(self, load_path: str) -> None:
         '''
         Loads previously saved model from load path.
@@ -381,8 +326,17 @@ class Modeler:
         # allow flexibility in path notation
         if load_path[-1] == '/':
             load_path[-1] == ''
+        
+        self.instance = xgb.Booster()
+        self.instance.load_model(f'{load_path}/model_{self.model}.json')
+        self.instance.load_config(f'{load_path}/config_{self.model}.json')
 
-        self.model = joblib.load(f'{load_path}/model_{self.model_type}')
+        with open(f'{load_path}/class_config_{self.model}.json', 'r') as fn:
+            class_config = json.load(fn)
+
+        self.features = class_config['features']
+        self.info.best_params = class_config['best_params']
+        self.info.best_boost = class_config['best_boost']
         return
 
     def save_predictions(self, save_path: str):
@@ -397,17 +351,15 @@ class Modeler:
         if save_path[-1] == '/':
             save_path[-1] == ''
 
-        for fold in range(self.n_folds):
+        for fold in range(self.data.n_folds):
             prediction = np.array(self.best_for_fold(fold))
-            path = save_path + f'/{self.model_type}_fold_{fold}'
-            np.save(path, prediction)
+            np.save(f'{save_path}/{self.model}_fold_{fold}', prediction)
 
         prediction = np.array(self.best_for_test())
-        path = save_path + f'/{self.model_type}_test'
-        np.save(path, prediction)
+        np.save(f'{save_path}/{self.model}_test', prediction)
         return
 
-    def all_at_once(self, save_path: str, loss_threshold: float = 1e-4):
+    def all_at_once(self, save_path: str, loss_threshold: float = 0.0, n_trials: int = 100):
         '''
         Performs dimension reduction, hyperparameter tuning, and prediction saving
         sequentially.
@@ -421,7 +373,7 @@ class Modeler:
         self.dimension_reduction(threshold=loss_threshold)
 
         title("Hyperparameter Tuning")
-        self.tune()
+        self.tune(n_trials = n_trials)
 
         title("Saving Predictions")
         self.save_predictions(save_path)
@@ -429,27 +381,36 @@ class Modeler:
         collect()
         return
 
+
 if __name__ == "__main__":
 
-    #train = pd.read_csv('./data/s4e5/train.csv').loc[:8000]
-    #test = pd.read_csv('./data/s4e5/test.csv')
-    #data = DataProcessor(train, test_data=test, primary_column='id')
-    #data.preprocess(n_clusters=3)
-    #data.set_cv()
+    # train = pd.read_csv('./data/s4e5/train.csv').loc[:8000]
+    # test = pd.read_csv('./data/s4e5/test.csv')
+    # data = DataProcessor(train, test_data=test, primary_column='id')
+    # data.preprocess(n_clusters=3)
+    # data.set_cv()
 
-    #xgboost = Modeler("xgb", data, goal='r')
-    #xgboost.dimension_reduction()
-    #xgboost.tune()
+    # xgboost = Modeler("xgb", data, goal='r')
+    # xgboost.dimension_reduction()
+    # xgboost.tune()
 
-    train = pd.read_csv('./data/s4e3/train.csv')
-    test = pd.read_csv('./data/s4e3/test.csv')
+    train = pd.read_csv('./data/s4e5/train.csv')
+    test = pd.read_csv('./data/s4e5/test.csv')
     data = DataProcessor(train, test_data=test, primary_column='id')
     data.set_cv()
 
     Xt, yt, Xv, yv = data.get_fold(0)
 
-    for modeltype in HYPERPARAMETER_SPACE:
-        model = Modeler(modeltype, data, goal='c')
-        model.fit(Xt, yt)
-        print(f'{modeltype} : {model.score(Xv, yv) : .4f}')
-
+    for modeltype in [
+        'hist_long',
+        'hist_wide',
+        'prox_long',
+        'prox_wide',
+        'rndm_long',
+        'rndm_wide',
+        'linr'
+    ]:
+        model = Modeler(modeltype, data, 'reg')
+        dtrain = DMatrix(Xt, yt)
+        model.fit(dtrain)
+        print(f'{modeltype} : {model.score(Xv, yv) : .6f}')

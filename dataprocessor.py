@@ -11,8 +11,6 @@ from explorer import Explorer
 from gc import collect
 from typing import Union, Tuple
 
-## Handle Missing Values (choice : delete / impute)
-
 class DataProcessor(Explorer):
     def __init__(self, 
                  train_data: pd.DataFrame,
@@ -95,7 +93,7 @@ class DataProcessor(Explorer):
 
         elif self.y.select_dtypes(include=['number']).empty: # case: single column is object
             # False for binary target, True otherwise
-            self.multi_target = len(self.y[*self.target].unique()) > 2 
+            self.multi_target = len(self.y[self.target].unique()) > 2 
 
         elif len(self.target) == 1: # single column is numeric
             self.multi_target = False
@@ -245,8 +243,8 @@ class DataProcessor(Explorer):
         else:
             X = pd.concat([self.train_num, self.train_cat], axis=1)
 
-        return (X[train_idx], self.y.loc[train_idx],
-                X[valid_idx], self.y.loc[valid_idx])
+        return X.loc[train_idx], self.y.loc[train_idx], \
+               X.loc[valid_idx], self.y.loc[valid_idx]
     
     def get_train(self, preprocessed : bool = True, dummies : bool = True):
 
@@ -258,7 +256,7 @@ class DataProcessor(Explorer):
         else:
             X = pd.concat([self.train_num, self.train_cat], axis=1)
 
-        return (X, self.y)
+        return X, self.y
     
     def get_test(self, preprocessed : bool = True, dummies : bool = True):
 

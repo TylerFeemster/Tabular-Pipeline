@@ -25,7 +25,7 @@ class Explorer:
             target: prediction columns
         '''
 
-        self.data = data.copy()
+        self.data = data # since all methods are passive, no copy
         self.classify = classify
 
         self.target = []
@@ -80,7 +80,7 @@ class Explorer:
         if display:
             title('Checking missing values...')
 
-        problem_cols = {}
+        problem_cols = dict()
         no_missing_values = True
         for col in self.cols:
             na_count = self.data[col].isna().sum()
@@ -141,7 +141,7 @@ class Explorer:
         if display:
             title(f'Unique Values')
 
-        unique_vals = {}
+        unique_vals = dict()
         for col in self.cat_cols:
             unique_vals[col] = sorted(self.data[col].unique())
             if display:
@@ -332,7 +332,7 @@ class Explorer:
         else:
             mutual_info = mutual_info_regression(X, y)
 
-        mi_map = {}
+        mi_map = dict()
         for mi, col in zip(mutual_info, X.columns):
             mi_map[col] = mi
             if display:
@@ -349,7 +349,6 @@ class Explorer:
             self.mutual_info(target, display=display)
 
         return
-
 
 if __name__ == "__main__":
     df = pd.read_csv('./data/s4e4/train.csv')

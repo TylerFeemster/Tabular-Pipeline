@@ -48,12 +48,12 @@ class Ensembler:
         ys = []
         for fold in range(self.data.n_folds):
             _, _, _, y_val = self.data.get_fold(fold)
-            y_val = np.array(y_val).reshape(-1) #??
+            y_val = np.array(y_val).reshape(-1)
             ys.append(y_val)
             
             Xs_per_model = []
             for modeler in self.modelers:
-                model = modeler.model_type
+                model = modeler.model
                 array = np.load(f'{self.path}/{model}_fold_{fold}.npy').reshape(-1, 1) #??
                 Xs_per_model.append(array)
             
@@ -93,20 +93,20 @@ class Ensembler:
         '''
         test = None
         for (coef, modeler) in zip(self.weights, self.modelers):
-            model = modeler.model_type
+            model = modeler.model
             array = coef * np.load(f'{self.path}/{model}_test.npy').reshape(-1, 1) # ??
             if test is not None:
                 test += array
             else: test = array
 
         submission = self.data.test_indices()
-        submission[self.data.targets] = test
+        submission[self.data.target] = test
         submission.to_csv(f'{self.path}/submission.csv', index=False)
         return submission
 
 if __name__ == "__main__":
 
-    train = pd.read_csv('./data/s4e5/train.csv').loc[:5000]
+    train = pd.read_csv('./data/s4e5/train.csv').loc[:1000]
     test  = pd.read_csv('./data/s4e5/test.csv')
 
     data = DataProcessor(train_data=train, test_data=test, primary_column='id', target='FloodProbability')
@@ -114,12 +114,19 @@ if __name__ == "__main__":
     data.set_cv()
 
     SAVE_PATH = './model_info'
-
-    models = [
-        Modeler(name, data) for name in ["xgb", "lgb", "lin"]
+    MODELS = [
+        'hist_long',
+        #'hist_wide',
+        #'prox_long',
+        'prox_wide',
+        #'rndm_long',
+        #'rndm_wide',
+        #'linr'
     ]
+
+    models = [Modeler(name, data, 'reg') for name in MODELS]
     for model in models:
-        model.all_at_once(SAVE_PATH, loss_threshold=0)
+        model.all_at_once(SAVE_PATH, n_trials=10)
 
     ensemble = Ensembler(models, data, SAVE_PATH)
     ensemble.optimize_weights()
@@ -127,4 +134,4 @@ if __name__ == "__main__":
 
     print('Ensemble Weights')
     for model, weight in zip(models, ensemble.weights):
-        print(f'{model.model_type} : {weight : .4f}')
+        print(f'{model.model} : {weight : .4f}')
