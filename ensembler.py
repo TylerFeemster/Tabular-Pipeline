@@ -133,5 +133,5 @@ if __name__ == "__main__":
     ensemble.generate_test_submission()
 
     print('Ensemble Weights')
-    for model, weight in zip(models, ensemble.weights):
+    for (model, weight) in zip(models, ensemble.weights):
         print(f'{model.model} : {weight : .4f}')

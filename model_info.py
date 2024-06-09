@@ -82,7 +82,7 @@ BOOST_PARAMS = {
 }
 
 RF_PARAMS = {
-    'num_parallel_tree': (1e2, 5e3, False, True),
+    'num_parallel_tree': (100, 4000, False, True),
     **TREE_PARAMS
 }
 
@@ -144,7 +144,7 @@ TOY_BOOST_PARAMS = {
 }
 
 TOY_RF_PARAMS = {
-    'num_parallel_tree': 5e2,
+    'num_parallel_tree': 500,
     **TOY_TREE_PARAMS
 }
 
@@ -203,7 +203,9 @@ BOOST_HYPER_PARAM = (1e2, 5e3, False, True)
 
 class ModelInfo:
 
-    def __init__(self, model : str, device : Union[str, None] = None, objective : Union[str, None] = None) -> None:
+    def __init__(self, model : str, device : Union[str, None] = None, 
+                 objective : Union[str, None] = None,
+                 seed : int = 0) -> None:
 
         assert model in MODELS, f"model must be one of {MODELS}."
         self.model = model
@@ -226,6 +228,7 @@ class ModelInfo:
         self.main_params = {**CONSTRUCTOR_PARAMS[model],
                             **COMPUTE_PARAMS[self.device],
                             **objective_params}
+        self.main_params['seed'] = seed
 
         self.hyper_params = HYPER_PARAMS[model]
         self.toy_params = TOY_PARAMS[model]

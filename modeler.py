@@ -23,7 +23,8 @@ class Modeler:
                  model: str,
                  data: DataProcessor,
                  goal: str,
-                 device: Union[str, None] = None) -> None:
+                 device: Union[str, None] = None,
+                 seed: int = 0) -> None:
 
         assert goal in ['reg', 'clf', 'mclf'], \
             "goal must be \'reg\', \'clf\', or \'mclf\'."
@@ -43,9 +44,10 @@ class Modeler:
                 self.criterion = log_loss
                 self.direction = 'minimize'
 
-        self.info = ModelInfo(model, device=device, objective=objective)
         self.model = model
-
+        self.seed = seed
+        self.info = ModelInfo(self.model, device=device, objective=objective, seed=self.seed)
+    
         self.instance = None
         self.data = data
         self.features = self.data.get_columns(dummies=True)
@@ -56,12 +58,12 @@ class Modeler:
             params: Union[dict, None] = None,
             num_boost_round: Union[int, None] = None) -> None:
         '''
-        Fits new model with (X,y)-data and optionally custom parameters.
+        Fits new model with training data and optional custom parameters.
 
         Arguments:
-            X: pandas dataframe for input data
-            y: pandas dataframe for target / output data
-            params: custom parameters
+            data: DMatrix containing training data.
+            params: Custom parameters for the model (optional).
+            num_boost_round: Number of boosting rounds (optional).
         '''
 
         default_params, default_num_boost_round = self.info.minimal_parameters()
@@ -142,12 +144,14 @@ class Modeler:
 
     def score(self, X: DataFrame, y: DataFrame) -> float:
         '''
-        Uses (X,y)-data on last model instance to make predictions and
-        returns a score.
+        Computes the score of the model on given data.
 
         Arguments:
-            X: pandas dataframe used to generate predictions
-            y: pandas dataframe with outputs to score against predictions
+            X: Dataframe for input features.
+            y: Dataframe for target values.
+
+        Returns:
+            The score of the model.
         '''
         data = DMatrix(X)
         prediction = self.instance.predict(data)
@@ -157,7 +161,7 @@ class Modeler:
 
     def feature_importances(self) -> Dict[str, float]:
 
-        importances = self.instance.get_score(importance_type='total_gain')
+        importances = self.instance.get_score(importance_type='weight')
         for col in self.features:
             if col not in importances:
                 importances[col] = 0.0
@@ -199,7 +203,7 @@ class Modeler:
         average_error = error / self.data.n_folds
         return average_error
 
-    def dimension_reduction(self, threshold: float = 0.0, display: bool = True) -> list:
+    def subtractive_dimension_reduction(self, threshold: float = 0.0, display: bool = True) -> list:
         '''
         Iteratively removes features that do not improve model score beyond threshold.
 
@@ -237,6 +241,43 @@ class Modeler:
         
         collect() # quick clean-up
         return [*self.features]
+    
+    def additive_dimension_reduction(self, threshold: float = 0.0):
+        '''
+        Reduces the number of features based on their importance.
+
+        Arguments:
+            threshold: Minimum improvement in score to justify keeping a feature.
+
+        Returns:
+            A list of dropped features.
+        '''
+        importance = self.instance.get_score(importance_type='weight')
+        importance = sorted(importance.items(), key=lambda x: x[1], reverse=True)
+        # importances in descending order
+
+        keep = [] # List of features to retain
+        drop = [] # List of features to drop
+        baseline = self.score(self.data.X_val, self.data.y_val)
+
+        for feature, _ in importance:
+            keep.append(feature)
+            score = self.score(self.data.X_val[keep], self.data.y_val)
+
+            if self.direction == 'maximize':
+                difference = score - baseline
+            else:
+                difference = baseline - score
+
+            if difference > threshold:
+                baseline = score
+            else:
+                keep.pop()  # Remove the feature if it does not improve the score sufficiently
+                drop.append(feature)
+        
+        self.features = keep
+        return drop
+
 
 ### Tuning
 
@@ -370,7 +411,7 @@ class Modeler:
         '''
 
         title("Dimension Reduction")
-        self.dimension_reduction(threshold=loss_threshold)
+        self.subtractive_dimension_reduction(threshold=loss_threshold)
 
         title("Hyperparameter Tuning")
         self.tune(n_trials = n_trials)

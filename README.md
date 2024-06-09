@@ -24,8 +24,9 @@ The Ensembler class takes a list of Modelers and creates a robust ensemble.
 
 # TODO
 
+* seed data processor
+
 * add flexibility for multi-target and classification
-* ^^^  use 1d array for multiclass with lgb: or default to this and use 2d otherwise
 
 * save versus pure memory workflow (auto checkpoints)
 
@@ -41,31 +42,10 @@ Multi-Model for Multi-Target??
 
 ## multiple columns... 
 
-* if 1 class or 2 classes summing to 1, use binary:logistic
-* if 2 classes are independent, not summing to one, use binary:logistic
+* if classes do not sum to 1 or there is only one target, use binary:logistic
 * if > 2 classes and sum to one, use multi:softmax
-* if > 2 classes and distinct, use binary:logistic
+* otherwise, for 2 classes summing to 1, use binary:logistic 
 
 * reg:squarederror
 * multi:softmax
 * binary:logistic
-
-# Models
-
-## Regression
-
-XGB tree methods:
-
- * 'exact'/'approx' --- small/med-large (no gpu)
-
- * 'hist'/'gpu_hist' --- cpu/gpu
-
-### 
-
-* explorer done
-
-* 
-
-* 
-
-* 

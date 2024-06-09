@@ -16,15 +16,20 @@ class DataProcessor(Explorer):
                  train_data: pd.DataFrame,
                  test_data: Union[pd.DataFrame, None] = None,
                  primary_column: Union[str, None] = None,
-                 target: Union[str, list] = []) -> None:
+                 target: Union[str, list] = [],
+                 seed: int = 0) -> None:
         '''
+        Initializes the DataProcessor class which extends the Explorer class for data preprocessing.
 
         Arguments:
-            train_data: train dataframe
-            test_data: test dataframe
-            primary_column: primary key in dataframes
-            target: prediction columns
+            train_data: The training dataframe.
+            test_data: The test dataframe (optional).
+            primary_column: The primary key in dataframes (optional).
+            target: The target prediction columns.
+            seed: Random seed for reproducibility.
         '''
+        self.seed = seed
+
         if primary_column:
             # verify primary key is a dataframe column
             assert primary_column in train_data.columns
@@ -78,14 +83,11 @@ class DataProcessor(Explorer):
 
         self.has_categorical = len(self.train_cat.columns) > 0
 
-        # Unsupervised: use all X available, train and test
-        self.X_unsupervised = self.train_num.copy()
+        # normed data
+        stats = self.train_num.describe().T
+        self.train_normed = (self.train_num - stats['mean']) / stats['std']
         if self.test is not None:
-            self.X_unsupervised = pd.concat([self.X_unsupervised, 
-                                             self.test_num],
-                                             axis=0)
-        stats = self.X_unsupervised.describe().T
-        self.X_unsupervised = (self.X_unsupervised - stats['mean']) / stats['std']
+            self.test_normed  = (self.test_num  - stats['mean']) / stats['std']
 
         # multi- or single-target
         if len(self.target) > 1:
@@ -102,7 +104,7 @@ class DataProcessor(Explorer):
             assert False, "Target columns not given and unable to infer."
 
         # Explorer
-        super().__init__(self.train, target=self.target)
+        super().__init__(self.train, target=self.target, seed=self.seed)
 
         # CV Scheme
         self.cv = None
@@ -110,62 +112,86 @@ class DataProcessor(Explorer):
 
 ### Adding Features
 
-    def add_logs(self, force : bool = False) -> None:
-
-        test = self.test is not None
+    def add_logs(self) -> None:
 
         for col in self.train_num.columns:
             minimum = min(self.train_num[col])
-            if test:
+
+            # ensure test set does not have mystery negative value
+            if self.test is not None:
                 minimum = min(minimum, min(self.test_num[col]))
-            
+                
             if minimum > 0:
                 self.train_num[f'log {col}'] = np.log(self.train_num[col])
-                if test:
+                if self.test is not None:
                     self.test_num[f'log {col}'] = np.log(self.test_num[col])
-            
-            elif force:
-                self.train_num[f'log {col}'] = np.log(self.train_num[col] - minimum + 1)
-                if test:
-                    self.test_num[f'log {col}'] = np.log(self.test_num[col] - minimum + 1)
 
         return
 
     def add_pca_components(self, n_components : Union[int, None] = None) -> None:
+        '''
+        Performs Principal Component Analysis (PCA) on the data, and adds components
+        to dataset(s).
 
-        if n_components is None or n_components > len(self.X_unsupervised.columns):
-            n_components = len(self.X_unsupervised.columns)
+        Arguments:
+            n_components: The number of principal components to compute.
 
-        pca = PCA(n_components=n_components).fit(self.X_unsupervised)
+        Returns:
+            The PCA model.
+        '''
+
+        if n_components is None or n_components > len(self.train_normed.columns):
+            n_components = len(self.train_normed.columns)
+
+        pca = PCA(n_components=n_components).fit(self.train_normed)
         self.train_num[[f'pca {i+1}' for i in range(n_components)]] = pca.transform(
-            self.X_unsupervised.loc[self.X.index])
+            self.train_normed)
         
         if self.test is not None:
             self.test_num[[f'pca {i+1}' for i in range(n_components)]] = pca.transform(
-                self.X_unsupervised.loc[self.test.index])
+                self.test_normed)
 
         return
     
     def add_clusters(self, n_clusters : int = 8) -> None:
+        '''
+        Performs KMeans clustering on the data. Each data point is assigned a cluster,
+        and the cluster number is put into a single 'Cluster' column as a string.
+
+        Arguments:
+            n_clusters: The number of clusters to form.
+
+        Returns:
+            The KMeans model.
+        '''
 
         if n_clusters <= 0: return
 
-        kmeans = KMeans(n_clusters=n_clusters).fit(self.X_unsupervised)
+        kmeans = KMeans(n_clusters=n_clusters, 
+                        random_state=self.seed).fit(self.train_normed)
         self.train_cat['Cluster'] = kmeans.predict(
-            self.X_unsupervised.loc[self.X.index]).astype(str) # avoid meaningless numeric
+            self.train_normed).astype(str) # avoid meaningless numeric
         
         self.has_categorical = True # categorical column added
         
         if self.test is not None:
             self.test_cat['Cluster'] = kmeans.predict(
-                self.X_unsupervised.loc[self.test.index]).astype(str)
+                self.test_normed).astype(str)
 
-        return
+        return kmeans
     
     def all_additions(self, n_components : Union[int, None] = None, 
-                      n_clusters : int = 8, force_log : bool = False) -> None:
-        
-        self.add_logs(force=force_log)
+                      n_clusters : int = 8, do_log : bool = True) -> None:
+        '''
+        Applies log transformation, PCA, and clustering to the data.
+
+        Arguments:
+            n_components: The number of principal components for PCA.
+            n_clusters: The number of clusters for KMeans.
+            do_log: Whether to apply log transformation.
+        '''
+        if do_log:
+            self.add_logs()
         self.add_clusters(n_clusters=n_clusters)
         self.add_pca_components(n_components=n_components)
 
@@ -174,16 +200,22 @@ class DataProcessor(Explorer):
 ### Preprocessing
 
     def make_dummies(self):
-
+        '''
+        Converts categorical features into dummy/indicator variables.
+        '''
         if not self.has_categorical: return
 
-        self.train_dum = pd.get_dummies(self.train_cat, dtype=int)
+        self.train_dum = pd.get_dummies(self.train[self.cat_cols], dtype=int)
         if self.test is not None:
-            self.test_dum = pd.get_dummies(self.test_cat, dtype=int)
+            self.test_dum = pd.get_dummies(
+                self.test[self.cat_cols], dtype=int)
 
         return
 
     def scale(self):
+        '''
+        Scales numerical features using RobustScaler.
+        '''
 
         if self.test is not None:
             num_scaler = RobustScaler(unit_variance=True)
@@ -210,6 +242,15 @@ class DataProcessor(Explorer):
         return
 
     def set_cv(self, n_folds : int = 5) -> None:
+        '''
+        Sets up cross-validation splits.
+
+        Arguments:
+            n_folds: The number of folds for cross-validation.
+
+        Returns:
+            The GroupKFold cross-validator.
+        '''
         
         if self.cv is not None and \
             len(self.cv['Fold'].unique()) == n_folds:
@@ -282,10 +323,20 @@ class DataProcessor(Explorer):
 ### Preprocess all at once
 
     def preprocess(self, n_folds: int = 5, pca_components: Union[int, None] = None,
-                   n_clusters: int = 8, force_log: bool = False, make_dummies : bool = True,
+                   n_clusters: int = 8, do_log: bool = True, make_dummies : bool = True,
                    scale : bool = True):
-        
-        self.all_additions(n_components=pca_components, n_clusters=n_clusters, force_log=force_log)
+        '''
+        Preprocesses the data by applying log transformation, PCA, clustering, dummy encoding, and scaling.
+
+        Arguments:
+            n_folds: Number of folds for cross-validation.
+            pca_components: Number of principal components for PCA (optional).
+            n_clusters: Number of clusters for KMeans.
+            do_log: Whether to apply log transformation.
+            make_dummies: Whether to apply dummy encoding.
+            scale: Whether to apply scaling.
+        '''
+        self.all_additions(n_components=pca_components, n_clusters=n_clusters, do_log=do_log)
         self.set_cv(n_folds=n_folds)
         if make_dummies:
             self.make_dummies()

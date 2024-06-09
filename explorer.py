@@ -14,19 +14,22 @@ class Explorer:
 
     def __init__(self, data: pd.DataFrame,
                  classify: bool = False,
-                 target: Union[str, list] = []) -> None:
+                 target: Union[str, list] = [],
+                 seed: int = 0) -> None:
         '''
         This class contains several common methods for exploring a dataframe 
         without mutating it.
 
         Arguments:
-            data: dataframe for exploration
-            classify: classification when True, regression when False
-            target: prediction columns
+            data: The dataframe for exploration.
+            classify: Whether the task is classification (True) or regression (False).
+            target: The target prediction columns.
+            seed: Random seed for reproducibility.
         '''
 
         self.data = data # since all methods are passive, no copy
         self.classify = classify
+        self.seed = seed
 
         self.target = []
         if target:
@@ -213,7 +216,7 @@ class Explorer:
             else:
                 title('Full PCA analysis')
 
-        pca = PCA(n_components=n_components).fit(self.X_norm)
+        pca = PCA(n_components=n_components, random_state=self.seed).fit(self.X_norm)
 
         if display:
             subtitle('Fraction of explained variance:')
@@ -242,9 +245,8 @@ class Explorer:
         # since mean of X_norm is 0, this is inertia for clusters = 1
         base_inertia = (self.X_norm.to_numpy()**2).sum()  # both axes summed
 
-        params = {'n_clusters': n_clusters,
-                  'random_state': 0}
-        kmeans = KMeans(**params).fit(self.X_norm)
+        kmeans = KMeans(n_clusters=n_clusters,
+                        random_state=self.seed).fit(self.X_norm)
 
         if display:
             print(f'Base Inertia (one cluster): {base_inertia:.3f}')
