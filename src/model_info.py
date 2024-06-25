@@ -279,8 +279,6 @@ class ModelInfo:
     
     def set_best_parameters(self, params : dict) -> None:
 
-        # add assertion
-
         for key, item in params.items():
             if key == 'num_boost_round':
                 self.best_boost = item

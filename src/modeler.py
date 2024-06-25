@@ -1,6 +1,6 @@
 from typing import Union, Tuple, Any, Dict, List
 from gc import collect
-from utils import title
+from utils import title, minortitle
 import json
 
 import xgboost as xgb
@@ -203,7 +203,7 @@ class Modeler:
         average_error = error / self.data.n_folds
         return average_error
 
-    def subtractive_dimension_reduction(self, threshold: float = 0.0, display: bool = True) -> list:
+    def dimension_reduction(self, threshold: float = 0.0, display: bool = True) -> List[str]:
         '''
         Iteratively removes features that do not improve model score beyond threshold.
 
@@ -221,10 +221,11 @@ class Modeler:
             full_cycle = True
             for col in cycle_columns:
                 new_score = self.leave_one_out(col)
-                diff = baseline - new_score
-                
-                if self.direction == 'minimize':
-                    diff = -diff
+
+                if self.direction == 'maximize':
+                    diff = baseline - new_score
+                else:
+                    diff = new_score - baseline
 
                 if diff < threshold:
                     self.features.remove(col)
@@ -232,7 +233,7 @@ class Modeler:
                     baseline = new_score
                     full_cycle = False
                     if display:
-                        print(f'New Score: {new_score:.6f} || Dropping {col} ...')
+                        minortitle(f'Dropping {col} ...\nNew Score: {new_score:.6f}')
                     collect()  # quick clean-up
                     break
 
@@ -241,43 +242,6 @@ class Modeler:
         
         collect() # quick clean-up
         return [*self.features]
-    
-    def additive_dimension_reduction(self, threshold: float = 0.0):
-        '''
-        Reduces the number of features based on their importance.
-
-        Arguments:
-            threshold: Minimum improvement in score to justify keeping a feature.
-
-        Returns:
-            A list of dropped features.
-        '''
-        importance = self.instance.get_score(importance_type='weight')
-        importance = sorted(importance.items(), key=lambda x: x[1], reverse=True)
-        # importances in descending order
-
-        keep = [] # List of features to retain
-        drop = [] # List of features to drop
-        baseline = self.score(self.data.X_val, self.data.y_val)
-
-        for feature, _ in importance:
-            keep.append(feature)
-            score = self.score(self.data.X_val[keep], self.data.y_val)
-
-            if self.direction == 'maximize':
-                difference = score - baseline
-            else:
-                difference = baseline - score
-
-            if difference > threshold:
-                baseline = score
-            else:
-                keep.pop()  # Remove the feature if it does not improve the score sufficiently
-                drop.append(feature)
-        
-        self.features = keep
-        return drop
-
 
 ### Tuning
 
@@ -411,7 +375,7 @@ class Modeler:
         '''
 
         title("Dimension Reduction")
-        self.subtractive_dimension_reduction(threshold=loss_threshold)
+        self.dimension_reduction(threshold=loss_threshold)
 
         title("Hyperparameter Tuning")
         self.tune(n_trials = n_trials)

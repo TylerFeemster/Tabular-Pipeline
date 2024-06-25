@@ -17,6 +17,12 @@ def subtitle(message: str):
     separator(symbol='-')
 
 @staticmethod
+def minortitle(message: str):
+    separator(symbol='-')
+    print(message)
+    separator(symbol='-')
+
+@staticmethod
 def align_integer(i : int, total : int):
     length = len(str(total))
     s = str(i)

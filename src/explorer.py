@@ -7,6 +7,7 @@ from utils import title, subtitle, align_integer
 from sklearn.cluster import KMeans
 from sklearn.decomposition import PCA
 from sklearn.feature_selection import mutual_info_classif, mutual_info_regression
+from sklearn.metrics import normalized_mutual_info_score
 
 from typing import Union
 
@@ -355,7 +356,7 @@ class Explorer:
 if __name__ == "__main__":
     df = pd.read_csv('./data/s4e4/train.csv')
 
-    prep = Explorer(df)
+    prep = Explorer(df, target='Rings')
     prep.datatypes()
     prep.missing_values()
     
@@ -369,5 +370,7 @@ if __name__ == "__main__":
     prep.pca_analysis()
 
     prep.mutual_info('Whole weight.1')
+
+    prep.target_mutual_info()
 
     #prep.distribution('Whole weight.2')
